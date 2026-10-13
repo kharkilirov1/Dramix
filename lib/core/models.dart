@@ -385,13 +385,21 @@ class KodikTitle {
         year: year,
         episodes: totalEpisodes,
         link: link,
+        kinopoiskId: kinopoiskId,
+        imdbId: imdbId,
+        mdlId: mdlId,
+        shikimoriId: shikimoriId,
+        translationId: translation?.id,
       );
 
   /// Identity used to collapse Kodik's per-dubbing duplicates in lists.
   ///
   /// Kodik stores every voice-over studio as its own record, so a popular drama
   /// can appear five times in a row. Anything that renders a feed must dedupe.
-  String get dedupeKey => kinopoiskId ?? imdbId ?? '$title|${year ?? 0}';
+  String get workId => titleWorkId(id, kinopoiskId: kinopoiskId,
+      imdbId: imdbId, mdlId: mdlId, shikimoriId: shikimoriId);
+
+  String get dedupeKey => workId;
 
   // View aliases that let the shared card widgets stay identical to the
   // reference client's.
@@ -455,6 +463,14 @@ class SavedTitleRef {
   final int? year;
   final int? episodes;
   final String link;
+  final String? kinopoiskId;
+  final String? imdbId;
+  final String? mdlId;
+  final String? shikimoriId;
+  final int? translationId;
+
+  String get workId => titleWorkId(id, kinopoiskId: kinopoiskId,
+      imdbId: imdbId, mdlId: mdlId, shikimoriId: shikimoriId);
 
   const SavedTitleRef({
     required this.id,
@@ -464,6 +480,11 @@ class SavedTitleRef {
     this.year,
     this.episodes,
     this.link = '',
+    this.kinopoiskId,
+    this.imdbId,
+    this.mdlId,
+    this.shikimoriId,
+    this.translationId,
   });
 
   String get subtitle {
@@ -481,6 +502,11 @@ class SavedTitleRef {
         if (year != null) 'year': year,
         if (episodes != null) 'episodes': episodes,
         'link': link,
+        if (kinopoiskId != null) 'kinopoiskId': kinopoiskId,
+        if (imdbId != null) 'imdbId': imdbId,
+        if (mdlId != null) 'mdlId': mdlId,
+        if (shikimoriId != null) 'shikimoriId': shikimoriId,
+        if (translationId != null) 'translationId': translationId,
       };
 
   factory SavedTitleRef.fromJson(Map<String, dynamic> j) => SavedTitleRef(
@@ -491,6 +517,11 @@ class SavedTitleRef {
         year: (j['year'] as num?)?.toInt(),
         episodes: (j['episodes'] as num?)?.toInt(),
         link: (j['link'] as String?) ?? '',
+        kinopoiskId: j['kinopoiskId'] as String?,
+        imdbId: j['imdbId'] as String?,
+        mdlId: j['mdlId'] as String?,
+        shikimoriId: j['shikimoriId'] as String?,
+        translationId: (j['translationId'] as num?)?.toInt(),
       );
 }
 
@@ -639,7 +670,9 @@ class CatalogFilter {
   bool accepts(KodikTitle title, {Set<String> watched = const <String>{}}) {
     final threshold = minRating;
     if (threshold != null && (title.grade ?? 0) < threshold) return false;
-    if (hideWatched && watched.contains(title.id)) return false;
+    if (hideWatched && (watched.contains(title.id) || watched.contains(title.workId))) {
+      return false;
+    }
     return true;
   }
 
