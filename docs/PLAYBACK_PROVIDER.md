@@ -2,7 +2,9 @@
 
 Only the Kodik adapter is implemented. FrameXTV was a design reference, not a
 content source or a protocol authority. No extractor, WASM/crypto service,
-direct-link resolver or new fallback provider is added.
+direct-link resolver or new fallback provider is added. directMediaResolution
+is false for Kodik: generic iframe media observations cannot distinguish episode
+content from same-frame advertising and must never authorize native takeover.
 
 ## Evidence status
 
