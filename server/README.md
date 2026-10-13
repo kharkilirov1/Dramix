@@ -1,7 +1,7 @@
 # Dramix local backend prototype
 
 Python 3.11+ and SQLite, using only the standard library. This draft adds a
-separate service; **Flutter does not call it yet**. No external infrastructure,
+separate service. Flutter can optionally use it for the catalog, explicit account import and episode comments. No external infrastructure,
 billing, deployment, live Kodik verification or production-readiness claim.
 
 ## Run locally
@@ -152,8 +152,7 @@ up to 256 parameter combinations; failures are not cached.
 Provider next_page URLs are removed, so server credentials in them are not
 returned. next_cursor contains the provider's next parameter when its origin
 passes validation. Repeat the same catalog endpoint and filters with next=<cursor>;
-this is a prototype contract and must be checked against recorded/live provider
-responses before integrating Flutter. It does not yet adapt JSON to AnixartiOS.
+this prototype contract is adapted by the optional Flutter gateway client, but still needs live-provider verification. It does not yet adapt JSON to AnixartiOS.
 It also does not resolve direct video streams, proxy media, or bypass iframe
 restrictions: playback still needs a separate client integration.
 
@@ -192,8 +191,8 @@ redacts text but retains the thread tombstone.
 
 Library and per-episode checkpoints are stored separately with optimistic
 per-item revision checks. Checkpoints are not an episode-completion ledger or
-accumulated watch-duration accounting. Client outbox, conflict UI and the actual
-Flutter import/sync integration are still required. History-duration statistics, offline conflict UI, account
+accumulated watch-duration accounting. The Flutter prototype keeps a per-account persisted import outbox and surfaces conflicts;
+full background bidirectional sync and deliberate conflict resolution remain follow-up work. History-duration statistics, offline conflict UI, account
 deletion/export, retention/cleanup of operation records, future schema migrations and
 durable cross-process caching are follow-up work. SQLite transactions serialize
 writes in this one process; no multi-worker guarantees are claimed.
