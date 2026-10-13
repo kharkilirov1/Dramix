@@ -8,17 +8,18 @@ import '../filter/filter_screen.dart';
 import '../release/title_screen.dart';
 import '../root.dart';
 import '../widgets.dart';
+import '../search/search_screen.dart';
+import 'home_shelves.dart';
 
-/// Главная: search bar, tabs
-/// Моя вкладка / Последнее / Онгоинги / Анонсы / Завершенные and the release list.
-class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key});
+/// Full cursor-paginated catalog and saved custom filter.
+class CatalogScreen extends StatefulWidget {
+  const CatalogScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  State<CatalogScreen> createState() => _CatalogScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _CatalogScreenState extends State<CatalogScreen> {
   /// "Последнее" is active by default, exactly like the reference client.
   int _tab = 1;
 
@@ -139,9 +140,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      bottom: false,
-      child: Column(
+    return PageScaffold(
+      title: 'Каталог',
+      body: Column(
         children: [
           TopBar(
             searchHint: 'Поиск дорам',
@@ -161,6 +162,84 @@ class _HomeScreenState extends State<HomeScreen> {
           Expanded(child: _body()),
         ],
       ),
+    );
+  }
+}
+
+/// Home focuses on resuming and discovering series; the complete catalog
+/// remains one tap away, without requiring a user account.
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({super.key});
+
+  void _results(BuildContext context, CatalogFilter filter) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => FilteredResultsScreen(filter: filter),
+    ));
+  }
+
+  Widget _shelf(BuildContext context, String title, CatalogFilter filter) {
+    return CatalogShelf(
+      key: ValueKey(filter.signature),
+      heading: title,
+      loader: () async {
+        final page = await KodikApi.instance.browseFiltered(filter, limit: 18);
+        return KodikApi.dedupe(page.results);
+      },
+      onSeeAll: () => _results(context, filter),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final recent = CatalogFilter(types: KodikCatalog.dramas);
+    final popular = CatalogFilter(
+        types: KodikCatalog.dramas, sort: CatalogSort.rating);
+    final korean = CatalogFilter(
+        types: KodikCatalog.dramas, sort: CatalogSort.rating)
+      ..countries.add('Корея Южная');
+    final romantic = CatalogFilter(
+        types: KodikCatalog.dramas, sort: CatalogSort.rating)
+      ..genres.add('мелодрама');
+    return SafeArea(
+      bottom: false,
+      child: ListView(children: [
+        TopBar(
+          searchHint: 'Поиск дорам и сериалов',
+          onSearch: () => Navigator.pushNamed(context, Routes.search),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Wrap(spacing: 10, runSpacing: 8, children: [
+            SizedBox(
+              width: 190,
+              child: LightPillButton(
+              label: 'Весь каталог',
+              icon: Icons.grid_view_rounded,
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => const CatalogScreen(),
+              )),
+              ),
+            ),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.tune),
+              label: const Text('Фильтр'),
+              onPressed: () async {
+                final filter = await Navigator.of(context).push<CatalogFilter>(
+                  MaterialPageRoute(builder: (_) => const FilterScreen()),
+                );
+                if (!context.mounted || filter == null) return;
+                _results(context, filter);
+              },
+            ),
+          ]),
+        ),
+        const ContinueWatchingShelf(),
+        _shelf(context, 'Недавно обновлённые', recent),
+        _shelf(context, 'Сериалы с высоким рейтингом', popular),
+        _shelf(context, 'Корейские дорамы', korean),
+        _shelf(context, 'Мелодрамы', romantic),
+        const SizedBox(height: 24),
+      ]),
     );
   }
 }

@@ -8,6 +8,7 @@ import '../release/title_screen.dart';
 import '../root.dart';
 import '../search/search_screen.dart';
 import '../widgets.dart';
+import '../home/home_shelves.dart';
 
 /// Обзор: баннеры, плитки действий, рекомендации и лента онгоингов.
 class DiscoverScreen extends StatefulWidget {
@@ -29,7 +30,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
   Future<void> _loadBanners() async {
     try {
       final page = await KodikApi.instance.browseFiltered(
-        CatalogFilter(sort: CatalogSort.rating, types: KodikCatalog.all),
+        CatalogFilter(sort: CatalogSort.rating, types: KodikCatalog.dramas),
         limit: 6,
       );
       final titles = KodikApi.dedupe(page.results)
@@ -60,7 +61,9 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       if (!mounted || title == null) return;
       await openTitle(context, title);
     } catch (_) {
-      // Случайный тайтл — необязательное действие: ошибку молча пропускаем.
+      if (mounted) {
+        showMessage(context, 'Не удалось выбрать сериал. Попробуйте ещё раз.');
+      }
     }
   }
 
@@ -195,49 +198,30 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
           ),
 
           const Padding(
-            padding: EdgeInsets.fromLTRB(16, 26, 16, 4),
-            child: Text('Рекомендации',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-          ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text('На основе ваших оценок',
-                style:
-                    TextStyle(fontSize: 13.5, color: AppColors.textTertiary)),
-          ),
-          Container(
-            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: const Text(
-              'Продолжайте смотреть и оценивать дорамы.\n'
-              'Чем больше вы смотрите, тем точнее будут подборки.',
-              style: TextStyle(
-                  fontSize: 14, color: AppColors.textSecondary, height: 1.5),
-            ),
+            padding: EdgeInsets.fromLTRB(16, 22, 16, 8),
+            child: Text('Подборки по странам и жанрам доступны в коллекциях.',
+                style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
           ),
 
-          const Padding(
-            padding: EdgeInsets.fromLTRB(16, 26, 16, 8),
-            child: Text('Сейчас выходят',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-          ),
-          SizedBox(
-            height: 420,
-            child: PagedScroll(
-              key: const ValueKey('discover-ongoing'),
-              loader: (cursor) => KodikApi.instance.fetch(
+          CatalogShelf(
+            heading: 'Сейчас выходят',
+            loader: () async {
+              final page = await KodikApi.instance.browseFiltered(
                 CatalogFilter(
                     allStatus: AiringStatus.ongoing.value,
-                    types: KodikCatalog.all),
-                cursor: cursor,
-              ),
-              itemBuilder: (context, title, _) => ReleaseListItem.kodik(
-                title,
-                onTap: () => openTitle(context, title),
+                    types: KodikCatalog.dramas),
+                limit: 18,
+              );
+              return KodikApi.dedupe(page.results);
+            },
+            onSeeAll: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => FilteredResultsScreen(
+                  filter: CatalogFilter(
+                      allStatus: AiringStatus.ongoing.value,
+                      types: KodikCatalog.dramas),
+                ),
               ),
             ),
           ),
