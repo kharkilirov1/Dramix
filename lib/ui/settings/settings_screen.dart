@@ -8,6 +8,7 @@ import '../../core/storage.dart';
 import '../../core/theme.dart';
 import '../premium/paywall_screen.dart';
 import '../widgets.dart';
+import '../backend_dialog.dart';
 
 /// Настройки (эталон: screenshot 09) — секции с иконками, доступ к Kodik,
 /// локальные данные и сведения о приложении.
@@ -30,7 +31,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Net.revision.addListener(_onRevision);
     Premium.revision.addListener(_onRevision);
     _loadUserToken();
-    if (!KodikApi.instance.tokens.hasToken) {
+    if (Net.backendOrigin == null && !KodikApi.instance.tokens.hasToken) {
       _busy = true;
       _resolveToken();
     }
@@ -173,6 +174,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (mounted) setState(() {});
               },
             ),
+            if (Net.backendOrigin == null) ...[
             _heading('ДОСТУП К KODIK'),
             _tile(
               icon: Icons.vpn_key_outlined,
@@ -208,14 +210,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 6, 20, 0),
               child: Text(
-                'Kodik не выдаёт токены публично. Приложение проверяет несколько '
-                'источников и использует первый рабочий, поэтому обычно ничего '
-                'вводить не нужно.',
+                'При обычном подключении приложение подбирает рабочий доступ '
+                'к каталогу. Если у вас есть свой токен, его можно указать здесь.',
                 style: TextStyle(
                     fontSize: 12, color: AppColors.textTertiary, height: 1.45),
               ),
             ),
+            ] else
+              _tile(
+                icon: Icons.cloud_outlined,
+                title: 'Каталог через свой сервер',
+                subtitle: Net.backendOrigin!.host,
+              ),
             _heading('СЕТЬ'),
+            _action(
+              icon: Icons.dns_outlined,
+              title: 'Свой сервер каталога',
+              subtitle: Net.backendOrigin?.host ?? 'Не подключён',
+              onTap: () async {
+                final changed = await configureBackend(context);
+                if (!mounted || !changed) return;
+                if (Net.backendOrigin == null && !KodikApi.instance.tokens.hasToken) {
+                  setState(() => _busy = true);
+                  await _resolveToken();
+                }
+              },
+            ),
+            if (Net.backendOrigin == null) ...[
             _tile(
               icon: Net.isDirect ? Icons.wifi : Icons.alt_route,
               title: 'Маршрут запросов',
@@ -244,6 +265,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     fontSize: 12, color: AppColors.textTertiary, height: 1.45),
               ),
             ),
+            ],
             _heading('ДАННЫЕ'),
             _action(
               icon: Icons.history,
