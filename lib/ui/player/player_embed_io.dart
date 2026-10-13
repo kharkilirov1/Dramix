@@ -31,6 +31,7 @@ bool get _hasWebView2 => Platform.isWindows;
 class PlayerEmbed extends StatefulWidget {
   /// The Kodik player page for this episode.
   final String url;
+  final PlaybackProvider provider;
 
   /// Reserved for an explicit, content-bound resolver. Generic iframe media
   /// URLs are not emitted: advertisements can use the same player origin.
@@ -54,6 +55,7 @@ class PlayerEmbed extends StatefulWidget {
   const PlayerEmbed({
     super.key,
     required this.url,
+    this.provider = const KodikPlaybackProvider(),
     required this.onStream,
     required this.onError,
     this.onLoaded,
@@ -74,7 +76,7 @@ class PlayerEmbed extends StatefulWidget {
 class _PlayerEmbedState extends State<PlayerEmbed> {
   static const String _progressChannel = 'DramixProgress';
   late final String _bridgeToken;
-  KodikPlaybackSession? _session;
+  PlaybackSession? _session;
   late final PlaybackBridgeGate _bridgeGate;
 
   String get _wrapper => buildWrapperHtml(widget.url,
@@ -108,7 +110,7 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
       origin: Uri.parse(widget.url).origin,
     );
     if (widget.onEvent != null) {
-      _session = KodikPlaybackProvider().openSession(
+      _session = widget.provider.openSession(
         frameUri: Uri.parse(widget.url), sessionId: widget.sessionId,
         epoch: widget.epoch, episodeKey: widget.episodeKey,
         season: widget.season, episode: widget.episode,

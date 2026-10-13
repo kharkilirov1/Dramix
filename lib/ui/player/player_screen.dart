@@ -27,12 +27,14 @@ class PlayerScreen extends StatefulWidget {
   final KodikTitle title;
   final List<KodikEpisodeRef> episodes;
   final int initialIndex;
+  final PlaybackProvider provider;
 
   const PlayerScreen({
     super.key,
     required this.title,
     required this.episodes,
     this.initialIndex = 0,
+    this.provider = const KodikPlaybackProvider(),
   });
 
   @override
@@ -190,7 +192,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     _lastNativeDuration = null;
     _progress = PlaybackProgressTracker(
       sessionId: _sessionId, workId: work,
-      providerId: (const KodikPlaybackProvider()).id, variantId: title.id,
+      providerId: widget.provider.id, variantId: title.id,
       season: episode.season, episode: episode.episode,
       save: (snapshot) => Library.record(WatchEntry(
         title: title, season: snapshot.season, episode: snapshot.episode,
@@ -334,7 +336,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     // A player-frame MP4/HLS request can still be an advertisement or preview.
     // Only an explicit content resolver may enable native takeover; Kodik's
     // supported adapter currently has no such capability.
-    if (!(const KodikPlaybackProvider()).capabilities.directMediaResolution) return;
+    if (!widget.provider.capabilities.directMediaResolution) return;
     if (!_isCurrent(request) ||
         _openingNative ||
         _preferWeb ||
@@ -361,7 +363,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     try {
       final frameUri = Uri.tryParse(_playerUrl ?? '');
       if (frameUri == null ||
-          !(const KodikPlaybackProvider()).supportsFrameUri(frameUri)) return;
+          !widget.provider.supportsFrameUri(frameUri)) return;
       final origin = frameUri.origin;
       final active = VideoPlayerController.networkUrl(
         Uri.parse(url),
@@ -678,6 +680,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     return PlayerEmbed(
       key: ValueKey<String>('$_sessionId:$url'),
       url: url,
+      provider: widget.provider,
       sessionId: _sessionId,
       epoch: request,
       episodeKey: '${widget.title.id}:${_episode!.season}:${_episode!.episode}',
