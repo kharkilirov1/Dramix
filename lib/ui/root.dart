@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../core/theme.dart';
+import '../core/net.dart';
 import 'bookmarks/bookmarks_screen.dart';
 import 'discover/discover_screen.dart';
 import 'home/home_screen.dart';
@@ -19,10 +20,27 @@ class _RootShellState extends State<RootShell> {
   int _tab = 0;
 
   @override
+  void initState() {
+    super.initState();
+    Net.revision.addListener(_onNetworkChanged);
+  }
+
+  void _onNetworkChanged() {
+    if (mounted) setState(() {});
+  }
+
+  @override
+  void dispose() {
+    Net.revision.removeListener(_onNetworkChanged);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: IndexedStack(
+        key: ValueKey<int>(Net.revision.value),
         index: _tab,
         children: const [
           HomeScreen(),

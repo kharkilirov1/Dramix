@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'backend_session.dart';
 import 'storage.dart';
+import 'models.dart';
 
 /// Explicit cloud snapshots and guest upload. Does not replace guest Library,
 /// schedule background work, or claim a bidirectional offline sync engine.
@@ -36,6 +37,7 @@ class BackendSync {
       var cursor = 0;
       var pages = 0;
       while (true) {
+        if (_scope != scope) throw StateError('Account changed before sync request');
         if (++pages > 10000) throw const FormatException('Too many pages');
         final page = await session.request('GET', '/v1/$feed',
             query: {'after': '$cursor', 'limit': '100'});
@@ -73,17 +75,27 @@ class BackendSync {
     final scope = _scope;
     final prefs = await SharedPreferences.getInstance();
     final pendingKey = '$scope.pending';
-    if (prefs.containsKey(pendingKey)) return retryPending();
+    final pendingRaw = prefs.getString(pendingKey);
+    if (_scope != scope) throw StateError('Account changed before import');
+    if (pendingRaw != null && (jsonDecode(pendingRaw) as List).isNotEmpty) {
+      return retryPending();
+    }
+    if (_scope != scope) throw StateError('Account changed before import');
     await pull();
+    if (_scope != scope) throw StateError('Account changed during import');
     final remote = (await snapshot())['library'] as Map;
     final bodies = <String, Map<String, dynamic>>{};
     Map<String, dynamic> body(String work) => bodies.putIfAbsent(work, () =>
         {'work_key': work, 'base_revision': 0});
     String canonical(String id) => RegExp(
         r'^(kinopoisk|imdb|mdl|shikimori|kodik):').hasMatch(id) ? id : 'kodik:$id';
+    Future<String> identity(SavedTitleRef title) async {
+      final known = await Library.workId(title.id);
+      return canonical(known == title.id ? title.workId : known);
+    }
     final history = await Library.history();
     for (final title in await Library.favorites()) {
-      final b = body(canonical(await Library.workId(title.id)));
+      final b = body(await identity(title));
       b['favorite'] = true;
       final rating = await Library.rating(title.id);
       if (rating != null) b['rating'] = rating;
@@ -91,14 +103,14 @@ class BackendSync {
     const statuses = ['watching', 'plans', 'completed', 'hold', 'dropped'];
     for (final status in WatchStatus.values) {
       for (final title in await Library.list(status)) {
-        final b = body(canonical(await Library.workId(title.id)));
+        final b = body(await identity(title));
         b['status'] = statuses[status.value - 1];
         final rating = await Library.rating(title.id);
         if (rating != null) b['rating'] = rating;
       }
     }
     for (final point in history) {
-      final work = canonical(await Library.workId(point.title.id));
+      final work = await identity(point.title);
       final b = body(work);
       final rating = await Library.rating(point.title.id);
       if (rating != null) b['rating'] = rating;
@@ -149,10 +161,12 @@ class BackendSync {
     final scope = _scope;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('$scope.pending');
+    if (_scope != scope) throw StateError('Account changed before retry');
     if (raw == null) return 0;
     final pending = (jsonDecode(raw) as List).cast<Map>();
     var completed = 0;
     while (pending.isNotEmpty) {
+      if (_scope != scope) throw StateError('Account changed before retry request');
       final op = pending.first;
       final body = (op['body'] as Map).cast<String, dynamic>();
       try {

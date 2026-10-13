@@ -5,6 +5,22 @@ import 'package:http/testing.dart';
 import 'package:dramix/core/backend_comments.dart';
 
 void main() {
+  test('authenticated writes refuse redirects without forwarding bearer', () async {
+    final api = BackendComments(origin: Uri.parse('https://example.test'),
+      token: () => 'synthetic-session', userId: () => '2',
+      client: MockClient((request) async {
+        expect(request.followRedirects, isFalse);
+        expect(request.url.host, 'example.test');
+        return http.Response('', 302, headers: {
+          'location': 'https://other.example.test/collect',
+        });
+      }));
+    final operation = api.create(workKey: 'kinopoisk:42', season: 1,
+      episode: 1, text: 'test', spoiler: false);
+    await expectLater(api.submit(operation), throwsA(
+      isA<CommentsError>().having((e) => e.status, 'status', 302)));
+  });
+
   test('reads use exact work/season/episode and hide spoilers by default', () async {
     final api = BackendComments(origin: Uri.parse('https://example.test'),
       token: () => null, userId: () => null, client: MockClient((request) async {

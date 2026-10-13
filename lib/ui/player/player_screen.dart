@@ -420,23 +420,28 @@ class _PlayerScreenState extends State<PlayerScreen>
       await _saveProgress();
       if (!mounted || Net.backendOrigin != origin) return;
       final session = BackendSession.forOrigin(origin);
-      await Navigator.of(context).push(MaterialPageRoute<void>(
-        builder: (_) => EpisodeCommentsScreen(
-          api: BackendComments(
-            origin: origin,
-            token: () => session.token,
-            userId: () => session.userId,
+      final comments = BackendComments(
+        origin: origin,
+        token: () => session.token,
+        userId: () => session.userId,
+      );
+      try {
+        await Navigator.of(context).push(MaterialPageRoute<void>(
+          builder: (_) => EpisodeCommentsScreen(
+            api: comments,
+            workKey: workKey,
+            season: episode.season,
+            episode: episode.episode,
+            onSignIn: () async {
+              await Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => AccountScreen(origin: origin, session: session),
+              ));
+            },
           ),
-          workKey: workKey,
-          season: episode.season,
-          episode: episode.episode,
-          onSignIn: () async {
-            await Navigator.of(context).push(MaterialPageRoute<void>(
-              builder: (_) => AccountScreen(origin: origin, session: session),
-            ));
-          },
-        ),
-      ));
+        ));
+      } finally {
+        comments.close();
+      }
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

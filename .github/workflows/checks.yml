@@ -1,8 +1,5 @@
 name: Dramix checks
 on:
-  push:
-    branches:
-      - 'codex/integration'
   pull_request:
 permissions:
   contents: read
