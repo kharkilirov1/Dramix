@@ -142,14 +142,10 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (ms == null) {
       // An embed does not report its position. Keep any known checkpoint for
       // this exact episode instead of replacing it with an unknown zero.
-      for (final entry in await Library.history()) {
-        if (entry.title.id == widget.title.id &&
-            entry.season == ep.season &&
-            entry.episode == ep.episode) {
-          ms = entry.positionMs;
-          break;
-        }
-      }
+      await Library.registerTitle(widget.title.ref);
+      final checkpoint = await Library.episodeCheckpoint(
+          widget.title.id, ep.season, ep.episode);
+      ms = checkpoint?.positionMs;
     }
     await Library.record(WatchEntry(
       title: widget.title.ref,
@@ -258,20 +254,19 @@ class _PlayerScreenState extends State<PlayerScreen>
       _controllers.add(active);
       await _wait(active.initialize(), cancelled);
       if (!_isCurrent(request)) return;
-      final history = await Library.history();
+      await Library.registerTitle(widget.title.ref);
+      final checkpoint = await Library.episodeCheckpoint(
+          widget.title.id, episode.season, episode.episode);
       if (!_isCurrent(request)) return;
-      for (final checkpoint in history) {
-        if (checkpoint.title.id == widget.title.id &&
-            checkpoint.season == episode.season &&
-            checkpoint.episode == episode.episode) {
-          final durationMs = active.value.duration.inMilliseconds;
-          final positionMs = checkpoint.positionMs.clamp(
-              0, durationMs > 0 ? durationMs : checkpoint.positionMs.clamp(0, 1 << 53));
-          if (positionMs > 0) {
-            await _wait(
-                active.seekTo(Duration(milliseconds: positionMs)), cancelled);
-          }
-          break;
+      if (checkpoint != null) {
+        final durationMs = active.value.duration.inMilliseconds;
+        final positionMs = checkpoint.positionMs.clamp(
+            0, durationMs > 0
+                ? durationMs
+                : checkpoint.positionMs.clamp(0, 1 << 53));
+        if (positionMs > 0) {
+          await _wait(
+              active.seekTo(Duration(milliseconds: positionMs)), cancelled);
         }
       }
       if (!_isCurrent(request) || !_foreground || _preferWeb) return;

@@ -50,12 +50,15 @@ class _TitleLoaderScreenState extends State<TitleLoaderScreen> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
+      await Library.registerTitle(widget.ref);
       final full = await KodikApi.instance.byId(widget.ref.id);
       if (!mounted) return;
       if (full == null) {
         setState(() => _error = 'Тайтл больше недоступен на Kodik');
         return;
       }
+      await Library.registerTitle(full.ref);
+      if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(builder: (_) => TitleScreen(title: full)),
       );
@@ -101,6 +104,7 @@ class _TitleScreenState extends State<TitleScreen> {
   WatchEntry? _resume;
   bool _expanded = false;
   bool _loading = true;
+  int _localRequest = 0;
 
   @override
   void initState() {
@@ -118,7 +122,11 @@ class _TitleScreenState extends State<TitleScreen> {
       final full = await KodikApi.instance.byId(widget.title.id);
       if (!mounted) return;
       if (full != null) {
+        await Library.registerTitle(full.ref);
+        if (!mounted) return;
         setState(() => _title = full);
+        await _loadLocal();
+        if (!mounted) return;
         unawaited(_loadVersions(full));
       }
     } catch (_) {
@@ -130,9 +138,13 @@ class _TitleScreenState extends State<TitleScreen> {
 
   Future<void> _loadVersions(KodikTitle source) async {
     try {
+      await Library.registerTitle(source.ref);
       final list = await KodikApi.instance.versions(source);
+      for (final version in list) {
+        await Library.registerTitle(version.ref);
+      }
       if (!mounted || list.isEmpty) return;
-      final found = list.indexWhere((e) => e.id == source.id);
+      final found = list.indexWhere((e) => e.id == _active.id);
       setState(() {
         _versions = list;
         _versionIndex = found < 0 ? 0 : found;
@@ -144,18 +156,19 @@ class _TitleScreenState extends State<TitleScreen> {
   }
 
   Future<void> _loadLocal() async {
-    final id = _active.id;
+    final request = ++_localRequest;
+    final title = _active;
+    final id = title.id;
+    await Library.registerTitle(title.ref);
     final favorite = await Library.isFavorite(id);
     final status = await Library.watchStatus(id);
     final rating = await Library.rating(id);
     final resume = await Library.resumePoint(id);
     final history = await Library.history();
-    if (!mounted || _active.id != id) return;
+    final started = await startedEpisodesForWork(title.ref, history);
+    if (!mounted || request != _localRequest || _active.id != id) return;
     setState(() {
-      _startedEpisodes = history
-          .where((e) => e.title.id == id && e.positionMs > 0)
-          .map((e) => '${e.season}:${e.episode}')
-          .toSet();
+      _startedEpisodes = started;
       _season ??= resume?.season;
       _favorite = favorite;
       _status = status;
@@ -229,7 +242,7 @@ class _TitleScreenState extends State<TitleScreen> {
 
   int _resumeIndex(List<KodikEpisodeRef> refs) {
     final r = _resume;
-    if (r == null || r.title.id != _active.id) {
+    if (r == null) {
       final selected = refs.indexWhere((e) => e.season == _season);
       return selected < 0 ? 0 : selected;
     }
@@ -443,7 +456,9 @@ class _TitleScreenState extends State<TitleScreen> {
     final resume = _resume;
     final label = !available
         ? 'Нет доступных серий'
-        : (resume == null || resume.title.id != _active.id
+        : (resume == null ||
+            !refs.any((e) => e.season == resume.season &&
+                e.episode == resume.episode)
             ? 'Воспроизвести'
             : 'Продолжить · ${refs[_resumeIndex(refs)].label}');
 

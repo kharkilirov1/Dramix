@@ -126,6 +126,26 @@ void main() {
     expect(await Library.continueWatching(), isEmpty);
   });
 
+  test('reads observe mutations queued before them without deadlocking', () async {
+    final record = Library.record(WatchEntry(title: first, season: 1, episode: 2,
+        positionMs: 1000, watchedAt: DateTime(2024)));
+    final history = Library.history();
+    expect(await history, hasLength(1));
+    await record;
+    final favorite = Library.toggleFavorite(first);
+    expect(await Library.isFavorite(first.id), isTrue);
+    await favorite;
+    final status = Library.setWatchStatus(first, WatchStatus.watching);
+    expect(await Library.watchStatus(first.id), WatchStatus.watching.value);
+    await status;
+    final rating = Library.setRating(first.id, 4);
+    expect(await Library.rating(first.id), 4);
+    await rating;
+    await Library.registerTitle(second);
+    expect((await Library.episodeCheckpoint(second.id, 1, 2))!.positionMs, 1000);
+    expect(await Library.episodeCheckpoint(second.id, 1, 3), isNull);
+  });
+
   test('metadata conflicts do not overwrite an established external alias', () async {
     await Library.registerTitle(first);
     await Library.registerTitle(const SavedTitleRef(
