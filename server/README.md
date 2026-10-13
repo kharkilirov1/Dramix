@@ -38,8 +38,9 @@ lifetime defaults to seven days.
 | GET /v1/catalog/search | title, external ID and other allowlisted search parameters |
 | GET /v1/catalog/translations | available translations |
 | GET /v1/library?after=0&limit=100 | authenticated changes, cursor, has_more |
-| PATCH /v1/library | partial library update |
-| DELETE /v1/library | work_key; syncable deletion tombstone |
+| PATCH /v1/library | partial update/import with required base_revision |
+| GET /v1/checkpoints?after=0&limit=100 | authenticated episode checkpoint changes; optional work_key |
+| DELETE /v1/library | work_key/base_revision; item and episode tombstones |
 | GET /v1/comments | work_key, season, episode, optional after/limit/reveal_spoilers=true |
 | POST /v1/comments | authenticated work_key/season/episode/text/spoiler |
 | PATCH /v1/comments/{id} | author-only replacement text/spoiler |
@@ -57,6 +58,7 @@ Example PATCH /v1/library body:
 ```json
 {
   "work_key": "kinopoisk:123",
+  "base_revision": 0,
   "favorite": true,
   "status": "watching",
   "rating": 4,
@@ -71,22 +73,69 @@ Example PATCH /v1/library body:
 
 Fields may be updated individually. status/rating/progress accept null to clear.
 status: watching/plans/completed/hold/dropped; rating: 1–5. Progress is a
-checkpoint, not proof of completion or accumulated watch duration.
+checkpoint, not proof of completion or accumulated watch duration. Updating
+progress saves that season/episode checkpoint durably and separately updates
+the last-resume pointer. Updating one episode never erases another checkpoint.
+Clearing progress clears only the last-resume pointer, not episode history.
 
 work_key is an **opaque stable content ID** supplied by the client. Suggested
 namespaces matching the Flutter identity work: kinopoisk:<positive digits>,
 imdb:tt<digits>, mdl:<positive digits>, shikimori:<positive digits>, fallback
-kodik:<provider-record-id>. This service never merges names/years, discovers
-aliases or replaces a provider playback ID. variant_id remains separate.
+kodik:<provider-record-id>. The server never merges names/years, discovers
+aliases or replaces a provider playback ID. variant_id remains separate;
+checkpoint identity is user + work_key + season + episode, and variant_id
+describes the latest saved rendition of that episode.
+
+Every library PATCH and DELETE requires **base_revision**: use 0 only for a
+never-created item; otherwise use its current revision from library sync.
+Comparison and all writes occur in one SQLite transaction. A stale revision
+returns 409 without altering library/checkpoints or recording a successful
+operation. Pull changes and resolve the conflict deliberately, then submit
+a new operation with a new Idempotency-Key and the current base_revision.
+Retrying an already successful request with its original key/body returns
+the old response without repeating writes, even if the item has since changed.
+
+DELETE emits a library tombstone and a tombstone for every active checkpoint.
+An ordinary PATCH cannot recreate a deleted item even with its latest revision.
+An intentional recreation requires restore=true AND the current tombstone
+base_revision; it restores only explicitly supplied fields/checkpoints.
+Older checkpoint tombstones remain, so history is not silently resurrected.
 
 Sync returns current snapshots changed since after, including tombstones.
 Keep polling while has_more is true; persist the returned cursor only after
-applying that page. Do not advance your cursor using a mutation response:
-other offline updates may exist before its revision. An idempotent replay can
-return an older mutation response; it does not restore that snapshot on the
-server. Conflicting new edits use last server-committed write per field;
-compare-and-swap/vector-clock conflict resolution is not implemented.
-DELETE removes all fields; a later PATCH explicitly recreates that item.
+applying that page. Library and checkpoint feeds have **independent cursors**.
+Do not advance a cursor using a mutation response: other updates may exist
+before its revision. An idempotent replay can return an older response; do not
+apply it over a newer local revision. Keep the same optional work_key filter
+for a checkpoint cursor, or restart from 0 when switching filters.
+
+## Import existing on-device history
+
+A library PATCH may contain checkpoints: an array of at most 100 unique
+season/episode checkpoint objects, using the same position_ms/variant_id format
+as progress. All imported points and library metadata share the same
+base_revision check, transaction and idempotency key. Supply progress separately
+to choose the last-resume pointer; the server does not guess it from episode
+number or array order. A checkpoints-only import leaves the resume pointer
+unchanged. Split larger histories into batches and use the resulting current
+library revision for each next batch, with a new operation key.
+
+1. Authenticate and fetch library/checkpoint snapshots with cursors starting at 0.
+2. Resolve local provider IDs to stable work_key using the Flutter identity map.
+   Do not merge titles by name/year. Group points per work_key and deduplicate
+   season/episode explicitly; select the latest locally recorded checkpoint.
+3. For a never-created work use base_revision=0. For an existing work review
+   server data first and use its current revision. Do not silently overwrite
+   server history or restore a tombstone during import.
+4. Send checkpoints[] and optional favorite/status/rating/progress. Persist the
+   request body and Idempotency-Key in the local outbox until success. On 409,
+   fetch current state and ask/reconcile instead of blindly changing the base.
+5. Poll both feeds and apply only revisions newer than the local stored ones.
+
+SQLite schema version 2 is created automatically. Existing prototype databases
+keep accounts/sessions/library and backfill their valid last-resume pointer
+into the episode table once; they cannot recover older episode history that was
+never uploaded. On-device history must be imported explicitly as above.
 
 Comments belong to a **specific season and episode**. Spoiler bodies are null
 unless reveal_spoilers=true; deleted bodies remain null in every response.
@@ -123,17 +172,15 @@ are readable without login and username is displayed. There is no spam/content
 moderation enforcement beyond reporting and owner checks. Comment deletion
 redacts text but retains the thread tombstone.
 
-Library stores only the last resume pointer per content item. An older episode
-update replaces that pointer; this API cannot yet import or synchronize the
-client's complete per-episode history. An offline stale PATCH after DELETE
-recreates the item, so enable sync only after selecting a conflict policy or
-adding base-revision checks. It is not an all-episode completion ledger. History-duration statistics, offline conflict UI, account
-deletion/export, retention/cleanup of operation records, SQL migrations and
+Library and per-episode checkpoints are stored separately with optimistic
+per-item revision checks. Checkpoints are not an episode-completion ledger or
+accumulated watch-duration accounting. Client outbox, conflict UI and the actual
+Flutter import/sync integration are still required. History-duration statistics, offline conflict UI, account
+deletion/export, retention/cleanup of operation records, future schema migrations and
 durable cross-process caching are follow-up work. SQLite transactions serialize
 writes in this one process; no multi-worker guarantees are claimed.
 
 Tests use an in-memory SQLite database and injected synthetic gateway responses.
 HTTP tests bind an ephemeral loopback port only. No real tokens or external
-network calls are needed. **Tests have not been executed in the current editing
-session** because a Python execution tool was unavailable; run the command above
-before integration. No Flutter tests or live playback checks were performed.
+network calls are needed. The current editing session has no local Python execution tool; GitHub Actions
+CI is being added separately to run these checks before integration. No Flutter tests or live playback checks were performed.
