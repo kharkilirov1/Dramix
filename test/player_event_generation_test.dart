@@ -82,12 +82,28 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('selecting an episode in the app clears the mismatch notice',
+      (tester) async {
+    final embed = await _open(tester);
+    _event(embed, PlaybackEventKind.episodeChanged, 1, episode: 2);
+    await tester.pump();
+    expect(find.textContaining('Серия/озвучка изменилась в плеере'), findsOneWidget);
+    await tester.tap(find.text('2'));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Серия/озвучка изменилась в плеере'), findsNothing);
+    expect(await Library.history(), isEmpty);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('in-frame episode mismatch suspends the original checkpoint',
       (tester) async {
     final embed = await _open(tester);
     _event(embed, PlaybackEventKind.play, 1);
     _event(embed, PlaybackEventKind.time, 2, position: 30000);
     _event(embed, PlaybackEventKind.episodeChanged, 3, episode: 2);
+    await tester.pump();
+    expect(find.textContaining('Серия/озвучка изменилась в плеере'), findsOneWidget);
     _event(embed, PlaybackEventKind.time, 4, position: 90000);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pumpAndSettle();

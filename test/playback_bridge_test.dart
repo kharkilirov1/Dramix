@@ -23,6 +23,23 @@ void main() {
     }), token: 'private', sessionId: 'current'), isNull);
   });
 
+  test('authenticated stream envelope sequence rejects replay and disorder', () {
+    final gate = PlaybackBridgeGate(token: 'private', sessionId: 'current',
+        origin: 'https://kodikplayer.com');
+    String envelope(int sequence, {String token = 'private',
+        String origin = 'https://kodikplayer.com'}) => jsonEncode({
+      'token': token, 'sessionId': 'current', 'sequence': sequence,
+      'origin': origin,
+      'payload': {'key': 'dramix_stream', 'value': 'https://cdn.example/video.mp4'},
+    });
+    expect(gate.accept(envelope(2)), isNotNull);
+    expect(gate.accept(envelope(2)), isNull);
+    expect(gate.accept(envelope(1)), isNull);
+    expect(gate.accept(envelope(100, token: 'spoofed')), isNull);
+    expect(gate.accept(envelope(100, origin: 'https://advert.example')), isNull);
+    expect(gate.accept(envelope(3)), isNotNull);
+  });
+
   test('oversized and invalid bridge payloads fail closed', () {
     expect(decodePlaybackBridge('x' * 20000,
         token: 'private', sessionId: 'current'), isNull);

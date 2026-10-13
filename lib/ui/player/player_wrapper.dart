@@ -31,6 +31,27 @@ Map<String, dynamic>? decodePlaybackBridge(String raw,
   }
 }
 
+/// Stateful gate for the authenticated wrapper stream and progress envelopes.
+class PlaybackBridgeGate {
+  final String token;
+  final String sessionId;
+  final String origin;
+  int _sequence = 0;
+
+  PlaybackBridgeGate({
+    required this.token, required this.sessionId, required this.origin,
+  });
+
+  Map<String, dynamic>? accept(String raw) {
+    final envelope = decodePlaybackBridge(raw, token: token, sessionId: sessionId);
+    if (envelope == null || envelope['origin'] != origin) return null;
+    final sequence = envelope['sequence'] as int;
+    if (sequence <= _sequence) return null;
+    _sequence = sequence;
+    return envelope;
+  }
+}
+
 String buildWrapperHtml(String playerUrl,
     {String? bridgeToken, String? sessionId}) {
   final safe = playerUrl

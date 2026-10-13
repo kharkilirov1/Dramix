@@ -76,6 +76,7 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
   static const String _progressChannel = 'DramixProgress';
   late final String _bridgeToken;
   KodikPlaybackSession? _session;
+  late final PlaybackBridgeGate _bridgeGate;
 
   String get _wrapper => buildWrapperHtml(widget.url,
       bridgeToken: _session == null ? null : _bridgeToken,
@@ -83,10 +84,8 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
 
   void _onProgress(String raw) {
     if (!mounted || widget.onEvent == null) return;
-    final envelope = decodePlaybackBridge(raw,
-        token: _bridgeToken, sessionId: widget.sessionId);
-    if (envelope == null ||
-        envelope['origin'] != Uri.parse(widget.url).origin) return;
+    final envelope = _bridgeGate.accept(raw);
+    if (envelope == null) return;
     final payload = envelope['payload'];
     if (payload is Map && payload['key'] == 'dramix_stream' &&
         payload['value'] is String) {
@@ -155,6 +154,10 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
   void initState() {
     super.initState();
     _bridgeToken = createPlaybackBridgeToken();
+    _bridgeGate = PlaybackBridgeGate(
+      token: _bridgeToken, sessionId: widget.sessionId,
+      origin: Uri.parse(widget.url).origin,
+    );
     if (widget.onEvent != null) {
       _session = KodikPlaybackProvider().openSession(
         frameUri: Uri.parse(widget.url), sessionId: widget.sessionId,

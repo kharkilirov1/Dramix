@@ -63,6 +63,7 @@ class _PlayerScreenState extends State<PlayerScreen>
   bool _nativeWasPlaying = false;
   bool _nativeEnded = false;
   int? _lastNativeDuration;
+  bool _embedSelectionChanged = false;
   bool _preferWeb = false;
   bool _foreground = true;
   bool _controlsVisible = true;
@@ -209,6 +210,7 @@ class _PlayerScreenState extends State<PlayerScreen>
          (widget.title.translation != null &&
              event.translationId != widget.title.translation!.id))) {
       unawaited(_stopProgress().catchError((Object _) {}));
+      setState(() => _embedSelectionChanged = true);
       return;
     }
     // Provider parsers validate their own source sequence. A single trusted
@@ -288,6 +290,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     setState(() {
       _mode = _Mode.loading;
       _error = null;
+      _embedSelectionChanged = false;
       _controlsVisible = true;
     });
 
@@ -331,6 +334,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         _openingNative ||
         _preferWeb ||
         !_foreground ||
+        _embedSelectionChanged ||
         _mode == _Mode.native ||
         !_isStream(url) ||
         !_seen.add(url)) {
@@ -350,17 +354,27 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     VideoPlayerController? controller;
     try {
+      final frameUri = Uri.tryParse(_playerUrl ?? '');
+      if (frameUri == null ||
+          !(const KodikPlaybackProvider()).supportsFrameUri(frameUri)) return;
+      final origin = frameUri.origin;
       final active = VideoPlayerController.networkUrl(
         Uri.parse(url),
-        httpHeaders: const {
-          'Referer': 'https://kodikplayer.com/',
-          'Origin': 'https://kodikplayer.com',
+        httpHeaders: {
+          'Referer': '$origin/',
+          'Origin': origin,
         },
       );
       controller = active;
       _controllers.add(active);
       await _wait(active.initialize(), cancelled);
-      if (!_isCurrent(request)) return;
+      if (!_isCurrent(request) || !_foreground || _preferWeb ||
+          _embedSelectionChanged) return;
+      // Close the iframe tracker before reading its last checkpoint; otherwise
+      // a throttled, newer iframe sample could be lost during native takeover.
+      await _beginProgress(request);
+      if (!_isCurrent(request) || !_foreground || _preferWeb ||
+          _embedSelectionChanged) return;
       await Library.registerTitle(widget.title.ref);
       final checkpoint = await Library.episodeCheckpoint(
           widget.title.id, episode.season, episode.episode);
@@ -376,9 +390,8 @@ class _PlayerScreenState extends State<PlayerScreen>
               active.seekTo(Duration(milliseconds: positionMs)), cancelled);
         }
       }
-      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
-      await _beginProgress(request);
-      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
+      if (!_isCurrent(request) || !_foreground || _preferWeb ||
+          _embedSelectionChanged) return;
       await _wait(_play(active), cancelled);
       if (!_isCurrent(request) || !_foreground || _preferWeb) return;
 
@@ -406,7 +419,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     } catch (_) {
       // Native playback failed. Kodik's own web player is still on screen and
       // remains fully usable, so there is nothing to report to the user.
-      if (_isCurrent(request) && _mode == _Mode.web) {
+      if (_isCurrent(request) && _mode == _Mode.web &&
+          !_embedSelectionChanged) {
         await _beginProgress(request);
         if (_isCurrent(request)) setState(() {});
       }
@@ -486,6 +500,15 @@ class _PlayerScreenState extends State<PlayerScreen>
         child: Column(
           children: [
             _topBar(),
+            if (_embedSelectionChanged)
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  'Серия/озвучка изменилась в плеере. Выберите её в Dramix, '
+                  'чтобы сохранять историю.',
+                  style: TextStyle(color: Colors.white70, fontSize: 12),
+                ),
+              ),
             Expanded(
               child: GestureDetector(
                 onTap: _mode == _Mode.native
