@@ -34,6 +34,18 @@ void _event(PlayerEmbed embed, PlaybackEventKind kind, int sequence,
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
+  testWidgets('a same-origin advertisement URL cannot trigger native takeover',
+      (tester) async {
+    final embed = await _open(tester);
+    embed.onStream('https://kodikplayer.com/ads/advertisement.mp4');
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerEmbed), findsOneWidget);
+    expect(await Library.history(), isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('page loading and position without play create no history',
       (tester) async {
     final embed = await _open(tester);

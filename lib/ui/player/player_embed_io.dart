@@ -1,8 +1,6 @@
-import 'dart:convert';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:collection/collection.dart' show UnmodifiableListView;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart' as inapp;
 import 'package:url_launcher/url_launcher.dart';
@@ -34,7 +32,8 @@ class PlayerEmbed extends StatefulWidget {
   /// The Kodik player page for this episode.
   final String url;
 
-  /// Fires when a direct `.m3u8` / `.mp4` URL surfaces.
+  /// Reserved for an explicit, content-bound resolver. Generic iframe media
+  /// URLs are not emitted: advertisements can use the same player origin.
   final void Function(String streamUrl) onStream;
 
   /// Fires when the embed itself cannot be shown.
@@ -86,13 +85,6 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
     if (!mounted || widget.onEvent == null) return;
     final envelope = _bridgeGate.accept(raw);
     if (envelope == null) return;
-    final payload = envelope['payload'];
-    if (payload is Map && payload['key'] == 'dramix_stream' &&
-        payload['value'] is String) {
-      if (_session?.isSuspended != false) return;
-      _onSniffed(payload['value'] as String);
-      return;
-    }
     final event = _session?.parseMessage(envelope['payload'],
         origin: envelope['origin'] as String,
         sourceVerified: true,
@@ -102,52 +94,9 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
     if (event != null) widget.onEvent!(event);
   }
 
-  /// Media hooks injected only into the origin-pinned WebView2 player frame.
-  static const String _sniffBody = r'''
-  var re = /\.(m3u8|mp4)(\?|$)/i;
-  var of = window.fetch;
-  window.fetch = function(input){
-    try {
-      var u = typeof input === 'string' ? input : (input && input.url) || '';
-      if (re.test(u)) post(u);
-    } catch(e){}
-    return of.apply(this, arguments);
-  };
-  var oo = XMLHttpRequest.prototype.open;
-  XMLHttpRequest.prototype.open = function(m, u){
-    try { if (re.test(String(u))) post(u); } catch(e){}
-    return oo.apply(this, arguments);
-  };
-  try {
-    var d = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
-    Object.defineProperty(HTMLMediaElement.prototype, 'src', {
-      set: function(v){
-        try { if (re.test(String(v))) post(v); } catch(e){}
-        d.set.call(this, v);
-      },
-      get: function(){ return d.get.call(this); }
-    });
-  } catch(e){}
-''';
-
-  /// Only the exact player origin may forward streams to its direct parent.
-  /// The main wrapper authenticates both event.source and event.origin and
-  /// adds its private nonce; nested advertisements cannot access that nonce.
-  String get _inappSniffJs =>
-      '(function(){'
-      'var origin = ${jsonEncode(Uri.parse(widget.url).origin)};'
-      'if (window.location.origin !== origin || window.parent === window) return;'
-      'if (window.__dramixSniff) return; window.__dramixSniff = true;'
-      'var post = function(u){ try {'
-      ' window.parent.postMessage({key:"dramix_stream",value:String(u)}, "*");'
-      ' } catch(e){} };'
-      '$_sniffBody'
-      '})();';
-
   WebViewController? _legacy;
   inapp.WebViewEnvironment? _environment;
   bool _environmentReady = false;
-  final Set<String> _seen = <String>{};
   bool _failed = false;
 
   @override
@@ -263,15 +212,6 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
         useShouldOverrideUrlLoading: true,
         transparentBackground: true,
       ),
-      initialUserScripts: UnmodifiableListView<inapp.UserScript>([
-        inapp.UserScript(
-          source: _inappSniffJs,
-          injectionTime: inapp.UserScriptInjectionTime.AT_DOCUMENT_START,
-          // WebView2 injects natively, so this reaches the cross-origin player
-          // iframe that a JavaScript channel could never touch.
-          forMainFrameOnly: false,
-        ),
-      ]),
       onWebViewCreated: (controller) {
         controller.addJavaScriptHandler(
           handlerName: _progressChannel,
@@ -299,11 +239,6 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
         unawaited(controller.evaluateJavascript(
           source: "window.dispatchEvent(new Event('dramixProgressBridgeReady'));",
         ).catchError((Object _) {}));
-        // The user script already ran at document start; re-running is a no-op
-        // thanks to the __dramixSniff guard and covers late navigations.
-        unawaited(controller
-            .evaluateJavascript(source: _inappSniffJs)
-            .catchError((Object _) {}));
         widget.onLoaded?.call();
       },
     );
@@ -319,11 +254,6 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
       return false;
     }
     return RegExp(r'\.(m3u8|mp4)$', caseSensitive: false).hasMatch(uri.path);
-  }
-
-  void _onSniffed(String url) {
-    if (!_isStream(url) || !_seen.add(url)) return;
-    widget.onStream(url);
   }
 
   /// Writes the iframe wrapper to a temp file and hands it to the browser.

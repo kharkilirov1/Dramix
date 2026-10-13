@@ -21,7 +21,7 @@ import 'player_wrapper.dart';
 ///
 /// The Kodik page is rendered by a platform-specific [PlayerEmbed] (WebView on
 /// mobile, WebView2 on Windows, `<iframe>` on web, browser on Linux). Only a
-/// source-verified player-frame stream is handed to the native
+/// explicitly content-bound media resolution may be handed to the native
 /// [VideoPlayerController] for proper seek and fullscreen controls.
 class PlayerScreen extends StatefulWidget {
   final KodikTitle title;
@@ -189,7 +189,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _nativeEnded = false;
     _lastNativeDuration = null;
     _progress = PlaybackProgressTracker(
-      sessionId: _sessionId, workId: work, providerId: title.id,
+      sessionId: _sessionId, workId: work,
+      providerId: (const KodikPlaybackProvider()).id, variantId: title.id,
       season: episode.season, episode: episode.episode,
       save: (snapshot) => Library.record(WatchEntry(
         title: title, season: snapshot.season, episode: snapshot.episode,
@@ -330,6 +331,10 @@ class _PlayerScreenState extends State<PlayerScreen>
           .hasMatch(Uri.parse(url).path);
 
   void _onSniffed(String url, int request) {
+    // A player-frame MP4/HLS request can still be an advertisement or preview.
+    // Only an explicit content resolver may enable native takeover; Kodik's
+    // supported adapter currently has no such capability.
+    if (!(const KodikPlaybackProvider()).capabilities.directMediaResolution) return;
     if (!_isCurrent(request) ||
         _openingNative ||
         _preferWeb ||
@@ -393,7 +398,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       if (!_isCurrent(request) || !_foreground || _preferWeb ||
           _embedSelectionChanged) return;
       await _wait(_play(active), cancelled);
-      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
+      if (!_isCurrent(request) || !_foreground || _preferWeb ||
+          _embedSelectionChanged) return;
 
       setState(() {
         _mode = _Mode.native;
