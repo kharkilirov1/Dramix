@@ -12,13 +12,16 @@ import '../account/account_screen.dart';
 import '../comments/episode_comments_screen.dart';
 import '../../core/storage.dart';
 import '../../core/theme.dart';
+import '../../core/playback_provider.dart';
+import '../../core/playback_progress.dart';
 import 'player_embed.dart';
+import 'player_wrapper.dart';
 
 /// Episode player.
 ///
 /// The Kodik page is rendered by a platform-specific [PlayerEmbed] (WebView on
-/// mobile, `<iframe>` on web, system browser on Windows/Linux). If a direct
-/// `.m3u8` / `.mp4` ever surfaces in the top frame it is handed to the native
+/// mobile, WebView2 on Windows, `<iframe>` on web, browser on Linux). Only a
+/// source-verified player-frame stream is handed to the native
 /// [VideoPlayerController] for proper seek and fullscreen controls.
 class PlayerScreen extends StatefulWidget {
   final KodikTitle title;
@@ -54,7 +57,12 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _generation = 0;
   Completer<void> _cancel = Completer<void>();
   bool _openingNative = false;
-  bool _playbackStarted = false;
+  PlaybackProgressTracker? _progress;
+  String _sessionId = '';
+  int _eventSequence = 0;
+  bool _nativeWasPlaying = false;
+  bool _nativeEnded = false;
+  int? _lastNativeDuration;
   bool _preferWeb = false;
   bool _foreground = true;
   bool _controlsVisible = true;
@@ -73,13 +81,15 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void dispose() {
+    final controller = _vc;
+    if (controller != null) _sampleNative(controller, _generation);
     _hideTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _generation++;
     if (!_cancel.isCompleted) _cancel.complete();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-    unawaited(_saveProgress());
+    unawaited(_stopProgress().catchError((Object _) {}));
     for (final c in _controllers.toList()) {
       _release(c);
     }
@@ -90,9 +100,10 @@ class _PlayerScreenState extends State<PlayerScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _foreground = state == AppLifecycleState.resumed;
     if (!_foreground) {
+      _nativeEvent(PlaybackEventKind.pause, _generation);
       final vc = _vc;
       if (vc != null) unawaited(vc.pause().catchError((Object _) {}));
-      unawaited(_saveProgress());
+      unawaited(_saveProgress().catchError((Object _) {}));
     }
   }
 
@@ -140,31 +151,121 @@ class _PlayerScreenState extends State<PlayerScreen>
       ]).timeout(const Duration(seconds: 30));
 
   Future<void> _saveProgress() async {
-    final ep = _episode;
-    if (ep == null || !_playbackStarted) return;
-    // Capture the controller's value before awaiting storage or changing episode.
-    var ms = _vc?.value.position.inMilliseconds;
-    if (ms == null) {
-      // An embed does not report its position. Keep any known checkpoint for
-      // this exact episode instead of replacing it with an unknown zero.
-      await Library.registerTitle(widget.title.ref);
-      final checkpoint = await Library.episodeCheckpoint(
-          widget.title.id, ep.season, ep.episode);
-      ms = checkpoint?.positionMs;
+    try {
+      await _progress?.flush();
+    } catch (_) {
+      // The tracker retains its failed snapshot for a later retry.
     }
-    await Library.record(WatchEntry(
-      title: widget.title.ref,
-      season: ep.season,
-      episode: ep.episode,
-      positionMs: ms ?? 0,
-      watchedAt: DateTime.now(),
-    ));
+  }
+
+  Future<void> _stopProgress() async {
+    final progress = _progress;
+    _progress = null;
+    try {
+      await progress?.close();
+    } catch (_) {
+      // Storage errors must not prevent stopping or switching playback.
+    }
+  }
+
+  Future<void> _beginProgress(int request) async {
+    await _stopProgress();
+    if (!_isCurrent(request)) return;
+    final episode = _episode;
+    if (episode == null) return;
+    final title = widget.title.ref;
+    var work = title.workId;
+    try {
+      await Library.registerTitle(title);
+      work = await Library.workId(title.id);
+    } catch (_) {
+      // Playback remains usable even if the guest library cannot be saved.
+    }
+    if (!_isCurrent(request)) return;
+    _sessionId = createPlaybackBridgeToken();
+    _eventSequence = 0;
+    _nativeWasPlaying = false;
+    _nativeEnded = false;
+    _lastNativeDuration = null;
+    _progress = PlaybackProgressTracker(
+      sessionId: _sessionId, workId: work, providerId: title.id,
+      season: episode.season, episode: episode.episode,
+      save: (snapshot) => Library.record(WatchEntry(
+        title: title, season: snapshot.season, episode: snapshot.episode,
+        positionMs: snapshot.positionMs, watchedAt: DateTime.now(),
+      )),
+    );
+  }
+
+  void _acceptProgress(PlaybackEvent event, int request) {
+    if (!_isCurrent(request) || event.sessionId != _sessionId) return;
+    if (!_foreground && event.kind != PlaybackEventKind.pause &&
+        event.kind != PlaybackEventKind.ended &&
+        event.kind != PlaybackEventKind.error &&
+        event.kind != PlaybackEventKind.episodeChanged) return;
+    if (event.kind == PlaybackEventKind.episodeChanged &&
+        ((event.season != null && event.season != _episode?.season) ||
+         (event.episode != null && event.episode != _episode?.episode) ||
+         (widget.title.translation != null &&
+             event.translationId != widget.title.translation!.id))) {
+      unawaited(_stopProgress().catchError((Object _) {}));
+      return;
+    }
+    // Provider parsers validate their own source sequence. A single trusted
+    // sequence also orders local lifecycle pauses with provider notifications.
+    final ordered = PlaybackEvent(
+      sessionId: event.sessionId, sequence: ++_eventSequence,
+      kind: event.kind, positionMs: event.positionMs,
+      durationMs: event.durationMs, season: event.season, episode: event.episode,
+      translationId: event.translationId,
+    );
+    final progress = _progress;
+    if (progress != null) {
+      unawaited(progress.accept(ordered).catchError((Object _) {}));
+    }
+  }
+
+  void _nativeEvent(PlaybackEventKind kind, int request,
+      {int? positionMs, int? durationMs}) {
+    _acceptProgress(PlaybackEvent(
+      sessionId: _sessionId, sequence: 0, kind: kind,
+      positionMs: positionMs, durationMs: durationMs,
+    ), request);
+  }
+
+  void _sampleNative(VideoPlayerController controller, int request) {
+    if (!_isCurrent(request) || _vc != controller) return;
+    final value = controller.value;
+    if (!value.isInitialized || value.hasError) return;
+    final position = value.position.inMilliseconds;
+    final duration = value.duration.inMilliseconds;
+    if (_lastNativeDuration != duration) {
+      _lastNativeDuration = duration;
+      _nativeEvent(PlaybackEventKind.duration, request, durationMs: duration);
+    }
+    if (value.isPlaying != _nativeWasPlaying) {
+      _nativeWasPlaying = value.isPlaying;
+      _nativeEvent(value.isPlaying
+          ? PlaybackEventKind.play : PlaybackEventKind.pause, request,
+          positionMs: position, durationMs: duration);
+    }
+    _nativeEvent(PlaybackEventKind.time, request,
+        positionMs: position, durationMs: duration);
+    if (value.isCompleted && !_nativeEnded) {
+      _nativeEnded = true;
+      _nativeEvent(PlaybackEventKind.ended, request,
+          positionMs: position, durationMs: duration);
+    } else if (!value.isCompleted) {
+      _nativeEnded = false;
+    }
   }
 
   // -------------------------------------------------------------- opening
 
   Future<void> _open(int index) async {
     if (!mounted) return;
+    final outgoingController = _vc;
+    if (outgoingController != null) _sampleNative(outgoingController, _generation);
     // Invalidates every in-flight native attempt for the previous episode.
     final request = ++_generation;
     if (!_cancel.isCompleted) _cancel.complete();
@@ -180,7 +281,6 @@ class _PlayerScreenState extends State<PlayerScreen>
     _vc = null;
     _playerUrl = null;
     _openingNative = false;
-    _playbackStarted = false;
     _preferWeb = false;
     _seen.clear();
     _index = index.clamp(
@@ -199,6 +299,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       });
       return;
     }
+    await _beginProgress(request);
+    if (!_isCurrent(request)) return;
     _openWeb(ep.url);
   }
 
@@ -275,30 +377,39 @@ class _PlayerScreenState extends State<PlayerScreen>
         }
       }
       if (!_isCurrent(request) || !_foreground || _preferWeb) return;
+      await _beginProgress(request);
+      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
       await _wait(_play(active), cancelled);
       if (!_isCurrent(request) || !_foreground || _preferWeb) return;
 
       setState(() {
         _mode = _Mode.native;
         _vc = active;
-        _playbackStarted = true;
       });
       active.addListener(() {
+        _sampleNative(active, request);
         if (_isCurrent(request) && _vc == active && active.value.hasError) {
-          unawaited(_saveProgress());
+          _nativeEvent(PlaybackEventKind.error, request);
+          unawaited(_saveProgress().catchError((Object _) {}));
           setState(() {
             _vc = null;
             _mode = _Mode.error;
             _error = 'Воспроизведение прервано';
           });
           _release(active);
+          unawaited(_stopProgress().catchError((Object _) {}));
         }
       });
+      _sampleNative(active, request);
       _armAutoHide();
-      unawaited(_saveProgress());
+      unawaited(_saveProgress().catchError((Object _) {}));
     } catch (_) {
       // Native playback failed. Kodik's own web player is still on screen and
       // remains fully usable, so there is nothing to report to the user.
+      if (_isCurrent(request) && _mode == _Mode.web) {
+        await _beginProgress(request);
+        if (_isCurrent(request)) setState(() {});
+      }
     } finally {
       if (controller != null && (!_isCurrent(request) || _vc != controller)) {
         _release(controller);
@@ -337,6 +448,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   /// Drops the native stream and returns to Kodik's own player.
   Future<void> _useWebPlayer() async {
     if (_episode == null || !mounted) return;
+    final activeController = _vc;
+    if (activeController != null) _sampleNative(activeController, _generation);
     final request = ++_generation;
     if (!_cancel.isCompleted) _cancel.complete();
     _cancel = Completer<void>();
@@ -353,6 +466,8 @@ class _PlayerScreenState extends State<PlayerScreen>
       } catch (_) {}
       _release(outgoing);
     }
+    if (!_isCurrent(request)) return;
+    await _beginProgress(request);
     if (!_isCurrent(request)) return;
     setState(() {
       _vc = null;
@@ -532,11 +647,23 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (url == null) return const SizedBox.shrink();
     final request = _generation;
     return PlayerEmbed(
-      key: ValueKey<String>(url),
+      key: ValueKey<String>('$_sessionId:$url'),
       url: url,
+      sessionId: _sessionId,
+      epoch: request,
+      episodeKey: '${widget.title.id}:${_episode!.season}:${_episode!.episode}',
+      season: _episode!.season,
+      episode: _episode!.episode,
+      translationId: widget.title.translation?.id,
+      isMovie: !widget.title.isSerial,
+      onEvent: (event) {
+        if (_mode == _Mode.web) _acceptProgress(event, request);
+      },
       onStream: (stream) => _onSniffed(stream, request),
       onError: (message) {
         if (!_isCurrent(request) || _mode == _Mode.native) return;
+        _nativeEvent(PlaybackEventKind.error, request);
+        unawaited(_stopProgress().catchError((Object _) {}));
         setState(() {
           _mode = _Mode.error;
           _error = message;
@@ -573,8 +700,12 @@ class _PlayerScreenState extends State<PlayerScreen>
                         max: max > 0 ? max : 1,
                         activeColor: AppColors.accent,
                         inactiveColor: Colors.white24,
-                        onChanged: (v) =>
-                            vc.seekTo(Duration(milliseconds: v.toInt())),
+                        onChanged: (v) {
+                          _nativeEvent(PlaybackEventKind.seek, _generation,
+                              positionMs: v.toInt());
+                          unawaited(vc.seekTo(Duration(milliseconds: v.toInt()))
+                              .catchError((Object _) {}));
+                        },
                       ),
                     ),
                     Text(_fmt(dur),
