@@ -9,6 +9,7 @@ import '../../core/theme.dart';
 import '../premium/paywall_screen.dart';
 import '../widgets.dart';
 import '../backend_dialog.dart';
+import '../account/account_screen.dart';
 
 /// Настройки (эталон: screenshot 09) — секции с иконками, доступ к Kodik,
 /// локальные данные и сведения о приложении.
@@ -266,6 +267,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
             ],
+            if (Net.backendOrigin != null)
+              _action(
+                icon: Icons.account_circle_outlined,
+                title: 'Аккаунт Dramix',
+                subtitle: 'Вход и перенос библиотеки на свой сервер',
+                onTap: () {
+                  final origin = Net.backendOrigin;
+                  if (origin == null) return;
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => AccountScreen(origin: origin),
+                  ));
+                },
+              ),
             _heading('ДАННЫЕ'),
             _action(
               icon: Icons.history,

@@ -5,6 +5,11 @@ import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../core/models.dart';
+import '../../core/net.dart';
+import '../../core/backend_session.dart';
+import '../../core/backend_comments.dart';
+import '../account/account_screen.dart';
+import '../comments/episode_comments_screen.dart';
 import '../../core/storage.dart';
 import '../../core/theme.dart';
 import 'player_embed.dart';
@@ -403,6 +408,44 @@ class _PlayerScreenState extends State<PlayerScreen>
     );
   }
 
+  Future<void> _openComments() async {
+    final episode = _episode;
+    final origin = Net.backendOrigin;
+    if (episode == null || origin == null) return;
+    try {
+      await Library.registerTitle(widget.title.ref);
+      final workKey = await Library.workId(widget.title.id);
+      final controller = _vc;
+      if (controller != null) await controller.pause();
+      await _saveProgress();
+      if (!mounted || Net.backendOrigin != origin) return;
+      final session = BackendSession.forOrigin(origin);
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => EpisodeCommentsScreen(
+          api: BackendComments(
+            origin: origin,
+            token: () => session.token,
+            userId: () => session.userId,
+          ),
+          workKey: workKey,
+          season: episode.season,
+          episode: episode.episode,
+          onSignIn: () async {
+            await Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => AccountScreen(origin: origin, session: session),
+            ));
+          },
+        ),
+      ));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Не удалось открыть комментарии')),
+        );
+      }
+    }
+  }
+
   Widget _topBar() {
     final ep = _episode;
     return Padding(
@@ -435,6 +478,12 @@ class _PlayerScreenState extends State<PlayerScreen>
               ],
             ),
           ),
+          if (Net.backendOrigin != null && ep != null)
+            IconButton(
+              tooltip: 'Комментарии к серии',
+              icon: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+              onPressed: _openComments,
+            ),
           if (_mode == _Mode.native)
             TextButton(
               onPressed: _useWebPlayer,

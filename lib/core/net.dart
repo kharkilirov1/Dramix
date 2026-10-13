@@ -53,7 +53,7 @@ class Net {
         (uri.path.isNotEmpty && uri.path != '/') ||
         (uri.scheme != 'https' &&
             !(uri.scheme == 'http' &&
-                const {'localhost', '127.0.0.1', '::1'}.contains(uri.host)))) {
+                const {'localhost', '127.0.0.1', '::1', '[::1]'}.contains(uri.host)))) {
       throw const FormatException(
           'Укажите HTTPS-адрес сервера без пути, параметров и пароля');
     }
