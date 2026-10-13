@@ -35,6 +35,7 @@ class PlaybackCapabilities {
   final bool reportsEnded;
   final bool tracksEmbeddedEpisode;
   final bool resumeSeek;
+  final bool directMediaResolution;
 
   const PlaybackCapabilities({
     this.reportsPosition = false,
@@ -43,6 +44,7 @@ class PlaybackCapabilities {
     this.reportsEnded = false,
     this.tracksEmbeddedEpisode = false,
     this.resumeSeek = false,
+    this.directMediaResolution = false,
   });
 }
 
@@ -64,6 +66,8 @@ abstract class PlaybackProvider {
 }
 
 abstract class PlaybackSession {
+  bool get isSuspended;
+
   PlaybackEvent? parseMessage(
     Object? data, {
     required String origin,
@@ -160,6 +164,7 @@ class KodikPlaybackSession implements PlaybackSession {
   final bool isMovie;
   final int? translationId;
 
+  @override
   bool get isSuspended => !_episodeMatches;
 
   int _lastSequence = -1;

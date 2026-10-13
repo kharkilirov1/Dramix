@@ -17,6 +17,7 @@ external JSString? _stringify(JSAny? value);
 /// — the Kodik player is the player on this platform.
 class PlayerEmbed extends StatefulWidget {
   final String url;
+  final PlaybackProvider provider;
   final void Function(String streamUrl) onStream;
   final void Function(String message) onError;
   final VoidCallback? onLoaded;
@@ -32,6 +33,7 @@ class PlayerEmbed extends StatefulWidget {
   const PlayerEmbed({
     super.key,
     required this.url,
+    this.provider = const KodikPlaybackProvider(),
     required this.onStream,
     required this.onError,
     this.onLoaded,
@@ -53,14 +55,14 @@ class _PlayerEmbedState extends State<PlayerEmbed> {
   late final String _viewType;
   late final JSFunction _messageListener;
   web.HTMLIFrameElement? _iframe;
-  KodikPlaybackSession? _session;
+  PlaybackSession? _session;
   int _sequence = 0;
 
   @override
   void initState() {
     super.initState();
     if (widget.onEvent != null) {
-      _session = KodikPlaybackProvider().openSession(
+      _session = widget.provider.openSession(
         frameUri: Uri.parse(widget.url), sessionId: widget.sessionId,
         epoch: widget.epoch, episodeKey: widget.episodeKey,
         season: widget.season, episode: widget.episode,

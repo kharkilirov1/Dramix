@@ -42,6 +42,7 @@ void main() {
         episodeKey: 'w:1:1', season: 1, episode: 1), isNull);
     }
     expect(provider.capabilities.resumeSeek, isFalse);
+    expect(provider.capabilities.directMediaResolution, isFalse);
     expect(provider.capabilities.reportsPosition, isTrue);
   });
 

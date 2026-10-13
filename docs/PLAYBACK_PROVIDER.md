@@ -2,7 +2,9 @@
 
 Only the Kodik adapter is implemented. FrameXTV was a design reference, not a
 content source or a protocol authority. No extractor, WASM/crypto service,
-direct-link resolver or new fallback provider is added.
+direct-link resolver or new fallback provider is added. directMediaResolution
+is false for Kodik: generic iframe media observations cannot distinguish episode
+content from same-frame advertising and must never authorize native takeover.
 
 ## Evidence status
 
@@ -61,7 +63,7 @@ seconds must be finite, nonnegative and at most seven days; numeric strings and
 booleans are not coerced. Milliseconds are rounded once at the adapter boundary.
 
 An embedded current_episode or expected translation mismatch emits episodeChanged and suspends further
-playback telemetry until the selected coordinates are reported again. isSuspended lets the embed block native stream takeover too. The app
+playback telemetry until the selected coordinates are reported again. The application keeps progress suspended until the episode is explicitly reopened in Dramix. isSuspended exposes the adapter state. The app
 must also suspend its tracker when it receives that event; it must not persist
 another iframe-selected series under the previous episode. Malformed episode
 coordinates suspend parsing rather than silently retaining an attribution.
@@ -78,7 +80,7 @@ metadata. The progress tracker must require confirmed play and attribute samples
 only to its current session/episode. A seek is a checkpoint change, not watched
 duration. Page load/iframe readiness and requested autoplay are not play events.
 
-Eleven adapter tests cover host/origin/source/context rejection, JSON decoding,
+Adapter tests cover host/origin/source/context rejection, JSON decoding,
 sequence replay, numeric bounds, separate seek semantics, embedded episode
 and translation switching, unknown payloads, movie context and actual event names. The generic error kind is available for
 trusted native/platform failure signals; no unverified Kodik error key is parsed. Fixtures are

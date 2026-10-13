@@ -23,14 +23,14 @@ void main() {
     }), token: 'private', sessionId: 'current'), isNull);
   });
 
-  test('authenticated stream envelope sequence rejects replay and disorder', () {
+  test('authenticated playback envelope sequence rejects replay and disorder', () {
     final gate = PlaybackBridgeGate(token: 'private', sessionId: 'current',
         origin: 'https://kodikplayer.com');
     String envelope(int sequence, {String token = 'private',
         String origin = 'https://kodikplayer.com'}) => jsonEncode({
       'token': token, 'sessionId': 'current', 'sequence': sequence,
       'origin': origin,
-      'payload': {'key': 'dramix_stream', 'value': 'https://cdn.example/video.mp4'},
+      'payload': {'key': 'kodik_player_time_update', 'value': 12},
     });
     expect(gate.accept(envelope(2)), isNotNull);
     expect(gate.accept(envelope(2)), isNull);

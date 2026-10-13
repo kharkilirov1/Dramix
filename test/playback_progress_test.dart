@@ -46,6 +46,19 @@ void main() {
     expect(saved.single.positionMs, 0);
   });
 
+  test('source adapter and variant stay separate from work and session', () async {
+    tracker = PlaybackProgressTracker(
+      sessionId: 'web-1', workId: 'kinopoisk:7', providerId: 'kodik',
+      variantId: 'serial-translation-9', season: 1, episode: 2,
+      save: (value) async { saved.add(value); },
+    );
+    await tracker.accept(event(1, PlaybackEventKind.play, positionMs: 1000));
+    expect(saved.single.providerId, 'kodik');
+    expect(saved.single.variantId, 'serial-translation-9');
+    expect(saved.single.workId, 'kinopoisk:7');
+    expect(saved.single.sessionId, 'web-1');
+  });
+
   test('play without a known position cannot overwrite a checkpoint', () async {
     await tracker.accept(event(1, PlaybackEventKind.play));
     await tracker.accept(event(2, PlaybackEventKind.pause));

@@ -31,8 +31,57 @@ void _event(PlayerEmbed embed, PlaybackEventKind kind, int sequence,
       positionMs: position, season: 1, episode: episode));
 }
 
+class _NoEventsProvider implements PlaybackProvider {
+  int opened = 0;
+  @override
+  String get id => 'test-provider';
+  @override
+  PlaybackCapabilities get capabilities => const PlaybackCapabilities();
+  @override
+  bool supportsFrameUri(Uri uri) => uri.host == 'player.example';
+  @override
+  PlaybackSession? openSession({
+    required Uri frameUri, required String sessionId, required int epoch,
+    required String episodeKey, required int season, required int episode,
+    bool isMovie = false, int? translationId,
+  }) {
+    opened++;
+    return null;
+  }
+}
+
 void main() {
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
+
+  testWidgets('screen passes an explicitly selected adapter to the embed',
+      (tester) async {
+    final provider = _NoEventsProvider();
+    await tester.pumpWidget(MaterialApp(home: PlayerScreen(
+      title: _title, provider: provider,
+      episodes: const [KodikEpisodeRef(season: 1, episode: 1,
+          url: 'https://player.example/series/1')],
+    )));
+    await tester.pumpAndSettle();
+    final embed = tester.widget<PlayerEmbed>(find.byType(PlayerEmbed));
+    expect(identical(embed.provider, provider), isTrue);
+    expect(provider.opened, 1);
+    expect(await Library.history(), isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a same-origin advertisement URL cannot trigger native takeover',
+      (tester) async {
+    final embed = await _open(tester);
+    embed.onStream('https://kodikplayer.com/ads/advertisement.mp4');
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerEmbed), findsOneWidget);
+    expect(await Library.history(), isEmpty);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+  });
 
   testWidgets('page loading and position without play create no history',
       (tester) async {
