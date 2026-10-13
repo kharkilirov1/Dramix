@@ -474,8 +474,24 @@ class Gateway:
 
 
 class Application:
-    def __init__(self, store, gateway):
+    def __init__(self, store, gateway, allowed_origins=()):
         self.store, self.gateway = store, gateway
+        self.allowed_origins = set()
+        for origin in allowed_origins:
+            uri = urlsplit(origin)
+            require(uri.scheme in {"http", "https"} and bool(uri.hostname)
+                    and not uri.username and not uri.password and not uri.path
+                    and not uri.query and not uri.fragment and "*" not in origin,
+                    message="CORS origins must be exact HTTP(S) origins")
+            require(uri.scheme == "https" or
+                    uri.hostname in {"localhost", "127.0.0.1", "::1"},
+                    message="HTTP CORS origins must be loopback")
+            try:
+                port = uri.port
+            except ValueError:
+                raise APIError(400, "Invalid CORS origin port") from None
+            require(port is None or 1 <= port <= 65535)
+            self.allowed_origins.add(origin)
         self.rate_lock, self.auth_attempts = threading.Lock(), {}
 
     def auth_rate(self, ip):
@@ -554,12 +570,37 @@ def handler_for(application):
         def do_DELETE(self):
             self.handle_api()
 
+        def do_OPTIONS(self):
+            try:
+                self.check_origin(required=True)
+                method = self.headers.get("Access-Control-Request-Method", "")
+                require(method in {"GET", "POST", "PATCH", "DELETE"}, 403,
+                        "CORS method is not allowed")
+                headers = {name.strip().lower() for name in
+                           self.headers.get("Access-Control-Request-Headers", "").split(",")
+                           if name.strip()}
+                require(headers <= {"content-type", "authorization", "idempotency-key"},
+                        403, "CORS header is not allowed")
+                self.respond(200, {"ok": True}, preflight=True)
+            except APIError as error:
+                self.respond(error.status, {"error": error.message})
+
+        def check_origin(self, required=False):
+            self._cors_origin = None
+            origin = self.headers.get("Origin")
+            if origin is None:
+                require(not required, 400, "Origin is required for preflight")
+                return
+            require(origin in application.allowed_origins, 403, "Origin is not allowed")
+            self._cors_origin = origin
+
         def setup(self):
             super().setup()
             self.connection.settimeout(10)
 
         def handle_api(self):
             try:
+                self.check_origin()
                 require(not self.headers.get("Transfer-Encoding"), 400)
                 length = int(self.headers.get("Content-Length", "0"))
                 require(0 <= length <= MAX_BODY, 413, "Request body too large")
@@ -583,12 +624,21 @@ def handler_for(application):
             except Exception:
                 self.respond(500, {"error": "Internal server error"})
 
-        def respond(self, status, body):
+        def respond(self, status, body, preflight=False):
             data = canonical(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            self.send_header("Vary", "Origin")
+            origin = getattr(self, "_cors_origin", None)
+            if origin is not None:
+                self.send_header("Access-Control-Allow-Origin", origin)
+            if preflight:
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE")
+                self.send_header("Access-Control-Allow-Headers",
+                                 "Content-Type, Authorization, Idempotency-Key")
+                self.send_header("Access-Control-Max-Age", "600")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.end_headers()
             self.wfile.write(data)
@@ -601,7 +651,10 @@ def main():
     path = os.environ.get("DRAMIX_DB", "dramix.sqlite3")
     store = Store(path)
     gateway = Gateway(os.environ.get("KODIK_TOKEN", ""))
-    server = ThreadingHTTPServer((host, port), handler_for(Application(store, gateway)))
+    origins = tuple(value.strip() for value in
+                    os.environ.get("DRAMIX_ALLOWED_ORIGINS", "").split(",") if value.strip())
+    server = ThreadingHTTPServer(
+        (host, port), handler_for(Application(store, gateway, allowed_origins=origins)))
     server.daemon_threads = True
     print(f"Dramix local prototype listening on {host}:{port}")
     try:
