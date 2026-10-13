@@ -49,6 +49,9 @@ class _PlayerScreenState extends State<PlayerScreen>
   int _generation = 0;
   Completer<void> _cancel = Completer<void>();
   bool _openingNative = false;
+  bool _playbackStarted = false;
+  bool _preferWeb = false;
+  bool _foreground = true;
   bool _controlsVisible = true;
   bool _fullscreen = false;
   String? _error;
@@ -80,7 +83,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state != AppLifecycleState.resumed) {
+    _foreground = state == AppLifecycleState.resumed;
+    if (!_foreground) {
       final vc = _vc;
       if (vc != null) unawaited(vc.pause().catchError((Object _) {}));
       unawaited(_saveProgress());
@@ -98,12 +102,16 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!_controllers.remove(controller)) return;
     final pending = _pendingPlay[controller];
     unawaited(() async {
+      try {
+        await controller.pause();
+      } catch (_) {}
       if (pending != null) {
         try {
-          await controller.pause();
+          await pending.timeout(const Duration(seconds: 30));
         } catch (_) {}
+        // A pending play may have completed after the first pause.
         try {
-          await pending;
+          await controller.pause();
         } catch (_) {}
       }
       try {
@@ -128,7 +136,8 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Future<void> _saveProgress() async {
     final ep = _episode;
-    if (ep == null) return;
+    if (ep == null || !_playbackStarted) return;
+    // Capture the controller's value before awaiting storage or changing episode.
     var ms = _vc?.value.position.inMilliseconds;
     if (ms == null) {
       // An embed does not report its position. Keep any known checkpoint for
@@ -170,6 +179,8 @@ class _PlayerScreenState extends State<PlayerScreen>
     _vc = null;
     _playerUrl = null;
     _openingNative = false;
+    _playbackStarted = false;
+    _preferWeb = false;
     _seen.clear();
     _index = index.clamp(
         0, widget.episodes.isEmpty ? 0 : widget.episodes.length - 1);
@@ -215,6 +226,8 @@ class _PlayerScreenState extends State<PlayerScreen>
   void _onSniffed(String url, int request) {
     if (!_isCurrent(request) ||
         _openingNative ||
+        _preferWeb ||
+        !_foreground ||
         _mode == _Mode.native ||
         !_isStream(url) ||
         !_seen.add(url)) {
@@ -227,6 +240,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     if (!_isCurrent(request) || _openingNative) return;
     _openingNative = true;
     final cancelled = _cancel.future;
+    final episode = _episode;
+    if (episode == null) {
+      _openingNative = false;
+      return;
+    }
     VideoPlayerController? controller;
     try {
       final active = VideoPlayerController.networkUrl(
@@ -240,15 +258,34 @@ class _PlayerScreenState extends State<PlayerScreen>
       _controllers.add(active);
       await _wait(active.initialize(), cancelled);
       if (!_isCurrent(request)) return;
-      await _wait(_play(active), cancelled);
+      final history = await Library.history();
       if (!_isCurrent(request)) return;
+      for (final checkpoint in history) {
+        if (checkpoint.title.id == widget.title.id &&
+            checkpoint.season == episode.season &&
+            checkpoint.episode == episode.episode) {
+          final durationMs = active.value.duration.inMilliseconds;
+          final positionMs = checkpoint.positionMs.clamp(
+              0, durationMs > 0 ? durationMs : checkpoint.positionMs.clamp(0, 1 << 53));
+          if (positionMs > 0) {
+            await _wait(
+                active.seekTo(Duration(milliseconds: positionMs)), cancelled);
+          }
+          break;
+        }
+      }
+      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
+      await _wait(_play(active), cancelled);
+      if (!_isCurrent(request) || !_foreground || _preferWeb) return;
 
       setState(() {
         _mode = _Mode.native;
         _vc = active;
+        _playbackStarted = true;
       });
       active.addListener(() {
         if (_isCurrent(request) && _vc == active && active.value.hasError) {
+          unawaited(_saveProgress());
           setState(() {
             _vc = null;
             _mode = _Mode.error;
@@ -298,9 +335,25 @@ class _PlayerScreenState extends State<PlayerScreen>
   }
 
   /// Drops the native stream and returns to Kodik's own player.
-  void _useWebPlayer() {
-    final ep = _episode;
-    if (ep == null) return;
+  Future<void> _useWebPlayer() async {
+    if (_episode == null || !mounted) return;
+    final request = ++_generation;
+    if (!_cancel.isCompleted) _cancel.complete();
+    _cancel = Completer<void>();
+    _hideTimer?.cancel();
+    _preferWeb = true;
+    _openingNative = false;
+    final outgoing = _vc;
+    await _saveProgress();
+    if (!_isCurrent(request)) return;
+    // Stop native audio before the iframe is mounted.
+    if (outgoing != null) {
+      try {
+        await outgoing.pause();
+      } catch (_) {}
+      _release(outgoing);
+    }
+    if (!_isCurrent(request)) return;
     setState(() {
       _vc = null;
       _mode = _Mode.web;
@@ -428,12 +481,13 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
     final url = _playerUrl;
     if (url == null) return const SizedBox.shrink();
+    final request = _generation;
     return PlayerEmbed(
       key: ValueKey<String>(url),
       url: url,
-      onStream: (stream) => _onSniffed(stream, _generation),
+      onStream: (stream) => _onSniffed(stream, request),
       onError: (message) {
-        if (!mounted || _mode == _Mode.native) return;
+        if (!_isCurrent(request) || _mode == _Mode.native) return;
         setState(() {
           _mode = _Mode.error;
           _error = message;

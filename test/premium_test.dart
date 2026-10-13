@@ -143,7 +143,7 @@ void main() {
     });
   });
 
-  group('history quota follows the tier', () {
+  group('history persists across tiers', () {
     Future<void> record(int count, {int from = 0}) async {
       for (var i = from; i < from + count; i++) {
         await Library.record(WatchEntry(
@@ -154,16 +154,19 @@ void main() {
       }
     }
 
-    test('free tier keeps a short tail, Plus keeps more', () async {
+    test('free and Plus preserve all recorded checkpoints', () async {
       await record(40);
-      expect((await Library.history()).length, Library.freeHistory);
+      expect((await Library.history()).length, 40);
 
       await Premium.grant(PremiumTier.plus);
       await record(30, from: 40);
 
       final length = (await Library.history()).length;
-      expect(length, greaterThan(Library.freeHistory));
-      expect(length, lessThanOrEqualTo(Library.maxHistory));
+      expect(length, 70);
+
+      await Premium.revoke();
+      await record(1, from: 70);
+      expect((await Library.history()).length, 71);
     });
   });
 }

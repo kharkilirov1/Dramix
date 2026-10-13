@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models.dart';
-import 'premium.dart';
 
 /// A user-maintained list, mirroring the reference client's list statuses.
 enum WatchStatus {
@@ -106,11 +105,22 @@ class Library {
   static const String _ratingsKey = 'dramix.ratings';
   static const String _searchKey = 'dramix.search';
   static const String _myTabKey = 'dramix.myTab';
-  static const int maxHistory = 200;
-
-  /// Free tier keeps a shorter tail of the watch history.
-  static const int freeHistory = 30;
   static const int maxSearch = 15;
+
+  /// Legacy presentation limits. Durable checkpoints are never trimmed.
+  static const int maxHistory = 200;
+  static const int freeHistory = 30;
+
+  // Serialize read-modify-write operations on the history key. Keep failures
+  // on the caller's future without poisoning subsequent writes.
+  static Future<void> _historyWrites = Future<void>.value();
+
+  static Future<void> _mutateHistory(Future<void> Function() action) {
+    final operation = _historyWrites.then((_) => action());
+    _historyWrites = operation.then<void>((_) {},
+        onError: (Object _, StackTrace __) {});
+    return operation;
+  }
 
   // --------------------------------------------------------------- history
 
@@ -123,7 +133,7 @@ class Library {
 
   /// Records a playback checkpoint, moving the title to the top and collapsing
   /// earlier entries for the same episode.
-  static Future<void> record(WatchEntry entry) async {
+  static Future<void> record(WatchEntry entry) => _mutateHistory(() async {
     final prefs = await SharedPreferences.getInstance();
     final list = _decodeList(prefs.getStringList(_historyKey))
         .map(WatchEntry.fromJson)
@@ -132,18 +142,16 @@ class Library {
             e.episode == entry.episode))
         .toList();
     list.insert(0, entry);
-    final limit = Premium.isPremium ? maxHistory : freeHistory;
-    if (list.length > limit) list.removeRange(limit, list.length);
     await prefs.setStringList(
         _historyKey, list.map((e) => jsonEncode(e.toJson())).toList());
     revision.value++;
-  }
+  });
 
-  static Future<void> clearHistory() async {
+  static Future<void> clearHistory() => _mutateHistory(() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_historyKey);
     revision.value++;
-  }
+  });
 
   /// Most recent checkpoint for a title, used for "continue watching".
   static Future<WatchEntry?> resumePoint(String titleId) async {

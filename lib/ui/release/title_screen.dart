@@ -93,6 +93,8 @@ class _TitleScreenState extends State<TitleScreen> {
   late KodikTitle _title;
   List<KodikTitle> _versions = const <KodikTitle>[];
   int _versionIndex = 0;
+  int? _season;
+  Set<String> _startedEpisodes = <String>{};
   bool _favorite = false;
   int? _status;
   int? _rating;
@@ -135,18 +137,26 @@ class _TitleScreenState extends State<TitleScreen> {
         _versions = list;
         _versionIndex = found < 0 ? 0 : found;
       });
+      await _loadLocal();
     } catch (_) {
       // Voice-over switching is a bonus; a failure must not break the page.
     }
   }
 
   Future<void> _loadLocal() async {
-    final favorite = await Library.isFavorite(widget.title.id);
-    final status = await Library.watchStatus(widget.title.id);
-    final rating = await Library.rating(widget.title.id);
-    final resume = await Library.resumePoint(widget.title.id);
-    if (!mounted) return;
+    final id = _active.id;
+    final favorite = await Library.isFavorite(id);
+    final status = await Library.watchStatus(id);
+    final rating = await Library.rating(id);
+    final resume = await Library.resumePoint(id);
+    final history = await Library.history();
+    if (!mounted || _active.id != id) return;
     setState(() {
+      _startedEpisodes = history
+          .where((e) => e.title.id == id && e.positionMs > 0)
+          .map((e) => '${e.season}:${e.episode}')
+          .toSet();
+      _season ??= resume?.season;
       _favorite = favorite;
       _status = status;
       _rating = rating;
@@ -219,7 +229,10 @@ class _TitleScreenState extends State<TitleScreen> {
 
   int _resumeIndex(List<KodikEpisodeRef> refs) {
     final r = _resume;
-    if (r == null) return 0;
+    if (r == null || r.title.id != _active.id) {
+      final selected = refs.indexWhere((e) => e.season == _season);
+      return selected < 0 ? 0 : selected;
+    }
     final i =
         refs.indexWhere((e) => e.season == r.season && e.episode == r.episode);
     return i < 0 ? 0 : i;
@@ -227,13 +240,6 @@ class _TitleScreenState extends State<TitleScreen> {
 
   Future<void> _play({int? index}) async {
     final active = _active;
-    if (index == null && _versions.length > 1) {
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => VoiceoverScreen(title: _title)),
-      );
-      if (mounted) await _loadLocal();
-      return;
-    }
     final refs = active.episodeRefs;
     if (refs.isEmpty) {
       showMessage(context, 'Для этого тайтла нет доступных серий');
@@ -579,7 +585,14 @@ class _TitleScreenState extends State<TitleScreen> {
                       : '${t.title} · субтитры');
               final active = i == _versionIndex;
               return GestureDetector(
-                onTap: () => setState(() => _versionIndex = i),
+                onTap: () async {
+                  setState(() {
+                    _versionIndex = i;
+                    _resume = null;
+                    _startedEpisodes = <String>{};
+                  });
+                  await _loadLocal();
+                },
                 child: Container(
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
@@ -605,7 +618,10 @@ class _TitleScreenState extends State<TitleScreen> {
   }
 
   Widget _episodes(List<KodikEpisodeRef> refs) {
-    final shown = refs.length > 24 ? 24 : refs.length;
+    final seasons = refs.map((e) => e.season).toSet().toList()..sort();
+    final selected = seasons.contains(_season) ? _season! : seasons.first;
+    final visible = refs.where((e) => e.season == selected).toList();
+    final shown = visible.length > 24 ? 24 : visible.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -615,14 +631,15 @@ class _TitleScreenState extends State<TitleScreen> {
             const Text('Серии',
                 style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Text('${refs.length}',
+            Text('${visible.length}',
                 style: const TextStyle(
                     fontSize: 14, color: AppColors.textTertiary)),
             const Spacer(),
             GestureDetector(
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                    builder: (_) => EpisodesScreen(title: _active)),
+                    builder: (_) => EpisodesScreen(
+                        title: _active, initialSeason: selected)),
               ),
               child: const Text('Все серии',
                   style: TextStyle(
@@ -630,6 +647,25 @@ class _TitleScreenState extends State<TitleScreen> {
             ),
           ]),
         ),
+        if (_active.isSerial)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(spacing: 8, children: [
+              for (final season in seasons)
+                ChoiceChip(
+                  label: Text('Сезон $season'),
+                  selected: season == selected,
+                  onSelected: (_) => setState(() => _season = season),
+                ),
+            ]),
+          ),
+        if (_startedEpisodes.isNotEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Text('· Начат просмотр',
+                style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+          ),
+        const SizedBox(height: 8),
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -642,17 +678,18 @@ class _TitleScreenState extends State<TitleScreen> {
           ),
           itemCount: shown,
           itemBuilder: (context, i) {
-            final ref = refs[i];
-            final watched = _isWatched(ref);
+            final ref = visible[i];
+            final watched = _startedEpisodes
+                .contains('${ref.season}:${ref.episode}');
             return GestureDetector(
-              onTap: () => _play(index: i),
+              onTap: () => _play(index: refs.indexOf(ref)),
               child: Container(
                 decoration: BoxDecoration(
                   color: watched ? AppColors.accent : AppColors.surface,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Center(
-                  child: Text('${ref.episode}',
+                  child: Text(watched ? '${ref.episode} ·' : '${ref.episode}',
                       style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -666,13 +703,6 @@ class _TitleScreenState extends State<TitleScreen> {
         ),
       ],
     );
-  }
-
-  bool _isWatched(KodikEpisodeRef ref) {
-    final r = _resume;
-    if (r == null || r.title.id != _active.id) return false;
-    if (r.season != ref.season) return false;
-    return r.episode != null && ref.episode < r.episode!;
   }
 
   Widget _ratingBlock(KodikTitle r) {

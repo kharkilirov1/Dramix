@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:dramix/core/models.dart';
 import 'package:dramix/core/storage.dart';
+import 'package:dramix/core/premium.dart';
 
 const SavedTitleRef _ref = SavedTitleRef(
   id: 'serial-32799',
@@ -24,7 +25,10 @@ WatchEntry _entry(int episode, DateTime at, {int positionMs = 0}) => WatchEntry(
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
+  setUp(() async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    await Premium.load();
+  });
 
   group('LibraryStats watch time', () {
     for (final sample in <int, int>{
@@ -81,6 +85,67 @@ void main() {
 
     test('resumePoint is null for an unknown title', () async {
       expect(await Library.resumePoint('serial-999'), isNull);
+    });
+
+    test('free history retains checkpoints beyond the old display limit', () async {
+      for (var i = 1; i <= 40; i++) {
+        await Library.record(_entry(i, DateTime(2024, 1, 1), positionMs: i * 1000));
+      }
+
+      final history = await Library.history();
+      expect(history, hasLength(40));
+      expect(history.first.episode, 40);
+      expect(history.last.episode, 1);
+      expect(history.last.positionMs, 1000);
+    });
+
+    test('premium expiry does not remove durable checkpoints', () async {
+      await Premium.grant(PremiumTier.plus);
+      for (var i = 1; i <= 210; i++) {
+        await Library.record(_entry(i, DateTime(2024, 1, 1), positionMs: i * 1000));
+      }
+      await Premium.grant(PremiumTier.plus,
+          until: DateTime.now().subtract(const Duration(days: 1)));
+      expect(Premium.isPremium, isFalse);
+      await Library.record(_entry(211, DateTime(2024, 1, 2)));
+
+      final history = await Library.history();
+      expect(history, hasLength(211));
+      expect(history.last.episode, 1);
+      expect(history.last.positionMs, 1000);
+    });
+
+    test('parallel records retain every distinct episode', () async {
+      await Future.wait(List.generate(
+          50, (i) => Library.record(_entry(i + 1, DateTime(2024, 1, 1)))));
+
+      final history = await Library.history();
+      expect(history, hasLength(50));
+      expect(history.map((e) => e.episode).toSet(), hasLength(50));
+      expect(history.first.episode, 50);
+    });
+
+    test('parallel updates collapse the same episode in invocation order', () async {
+      await Future.wait(List.generate(
+          20,
+          (i) => Library.record(_entry(1, DateTime(2024, 1, 1),
+              positionMs: (i + 1) * 1000))));
+
+      final history = await Library.history();
+      expect(history, hasLength(1));
+      expect(history.single.positionMs, 20000);
+    });
+
+    test('clear waits for earlier records and later records survive', () async {
+      await Future.wait([
+        Library.record(_entry(1, DateTime(2024, 1, 1))),
+        Library.clearHistory(),
+        Library.record(_entry(2, DateTime(2024, 1, 2))),
+      ]);
+
+      final history = await Library.history();
+      expect(history, hasLength(1));
+      expect(history.single.episode, 2);
     });
 
     test('clearHistory empties the list', () async {

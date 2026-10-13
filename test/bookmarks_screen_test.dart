@@ -89,4 +89,27 @@ void main() {
     expect(find.text(_watching.title), findsOneWidget);
     expect(find.text(_planned.title), findsNothing);
   });
+
+  testWidgets('history distinguishes seasons and keeps checkpoint metadata',
+      (tester) async {
+    await Library.record(WatchEntry(
+      title: _history,
+      season: 1,
+      episode: 1,
+      positionMs: 125000,
+      watchedAt: DateTime(2026, 10, 10),
+    ));
+    await Library.record(WatchEntry(
+      title: _history,
+      season: 2,
+      episode: 1,
+      watchedAt: DateTime(2026, 10, 11),
+    ));
+    await _pumpScreen(tester);
+    await _selectTab(tester, 'История');
+
+    expect(find.text(_history.title), findsNWidgets(2));
+    expect(find.text('Сезон 1 · Серия 1\nПозиция 2:05'), findsOneWidget);
+    expect(find.text('Сезон 2 · Серия 1\nПозиция неизвестна'), findsOneWidget);
+  });
 }

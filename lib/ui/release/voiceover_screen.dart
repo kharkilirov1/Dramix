@@ -148,7 +148,9 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
 class EpisodesScreen extends StatefulWidget {
   final KodikTitle title;
 
-  const EpisodesScreen({super.key, required this.title});
+  final int? initialSeason;
+
+  const EpisodesScreen({super.key, required this.title, this.initialSeason});
 
   @override
   State<EpisodesScreen> createState() => _EpisodesScreenState();
@@ -156,25 +158,29 @@ class EpisodesScreen extends StatefulWidget {
 
 class _EpisodesScreenState extends State<EpisodesScreen> {
   List<KodikEpisodeRef> _episodes = const <KodikEpisodeRef>[];
-  WatchEntry? _resume;
+  int? _season;
+  bool _descending = false;
+  Set<String> _startedEpisodes = <String>{};
 
   @override
   void initState() {
     super.initState();
     _episodes = widget.title.episodeRefs;
+    _season = widget.initialSeason;
     _loadLocal();
   }
 
   Future<void> _loadLocal() async {
     final resume = await Library.resumePoint(widget.title.id);
-    if (mounted) setState(() => _resume = resume);
-  }
-
-  bool _isWatched(KodikEpisodeRef ref) {
-    final r = _resume;
-    if (r == null) return false;
-    if (r.season != ref.season) return false;
-    return r.episode != null && ref.episode < r.episode!;
+    final history = await Library.history();
+    if (!mounted) return;
+    setState(() {
+      _season ??= resume?.season;
+      _startedEpisodes = history
+          .where((e) => e.title.id == widget.title.id && e.positionMs > 0)
+          .map((e) => '${e.season}:${e.episode}')
+          .toSet();
+    });
   }
 
   Future<void> _open(int index) async {
@@ -194,6 +200,17 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
   Widget build(BuildContext context) {
     final t = widget.title.translation;
     final studio = t?.title ?? 'Источник';
+    final seasons = _episodes.map((e) => e.season).toSet().toList()..sort();
+    final selected = seasons.contains(_season)
+        ? _season
+        : (seasons.isEmpty ? null : seasons.first);
+    final visible = _episodes.where((e) => e.season == selected).toList();
+    if (_descending) {
+      final reversed = visible.reversed.toList();
+      visible
+        ..clear()
+        ..addAll(reversed);
+    }
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -228,19 +245,34 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                     size: 24, color: AppColors.textSecondary),
                 onPressed: _episodes.length < 2
                     ? null
-                    : () => setState(
-                        () => _episodes = _episodes.reversed.toList()),
+                    : () => setState(() => _descending = !_descending),
               ),
             ]),
           ),
           const Divider(height: 1, color: AppColors.outline),
+          if (widget.title.isSerial && seasons.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: DropdownButton<int>(
+                value: selected,
+                isExpanded: true,
+                items: [
+                  for (final season in seasons)
+                    DropdownMenuItem(
+                      value: season,
+                      child: Text('Сезон $season'),
+                    ),
+                ],
+                onChanged: (season) => setState(() => _season = season),
+              ),
+            ),
           Expanded(
             child: _episodes.isEmpty
                 ? const Center(
                     child: Text('Нет эпизодов',
                         style: TextStyle(color: AppColors.textTertiary)))
                 : ListView.builder(
-                    itemCount: _episodes.length + 2,
+                    itemCount: visible.length + 2,
                     itemBuilder: (context, i) {
                       if (i == 0) {
                         return Padding(
@@ -260,19 +292,20 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                               'не имеет.',
                         );
                       }
-                      final ref = _episodes[i - 2];
-                      final watched = _isWatched(ref);
+                      final ref = visible[i - 2];
+                      final watched = _startedEpisodes
+                          .contains('${ref.season}:${ref.episode}');
                       return InkWell(
-                        onTap: () => _open(i - 2),
+                        onTap: () => _open(_episodes.indexOf(ref)),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 18),
                           child: Row(children: [
                             Expanded(
                               child: Text(
-                                ref.episode == 1 && _episodes.length == 1
+                                !widget.title.isSerial && _episodes.length == 1
                                     ? 'Полнометражный фильм'
-                                    : 'Серия ${ref.episode}',
+                                    : 'Сезон ${ref.season} · Серия ${ref.episode}',
                                 style: TextStyle(
                                     fontSize: 16,
                                     color: watched
@@ -281,8 +314,10 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                               ),
                             ),
                             if (watched)
-                              const Icon(Icons.check_rounded,
-                                  size: 18, color: AppColors.badgeNew),
+                              const Text('Начат просмотр',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondary)),
                           ]),
                         ),
                       );

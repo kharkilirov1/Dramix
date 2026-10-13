@@ -32,6 +32,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
   ];
 
   List<SavedTitleRef> _items = const <SavedTitleRef>[];
+  List<WatchEntry> _history = const <WatchEntry>[];
   bool _loading = true;
   String? _error;
   int _request = 0;
@@ -72,9 +73,11 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     });
     try {
       final List<SavedTitleRef> items;
+      var history = const <WatchEntry>[];
       switch (tab) {
         case 1:
-          items = (await Library.history()).map((e) => e.title).toList();
+          history = await Library.history();
+          items = history.map((e) => e.title).toList();
         case 2:
           items = await Library.favorites();
         default:
@@ -83,6 +86,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
       if (!mounted || token != _request) return;
       setState(() {
         _items = items;
+        _history = history;
         _loading = false;
       });
     } catch (e) {
@@ -188,6 +192,36 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     }
     if (_error != null) {
       return ErrorCentered(message: _error!, onRetry: _load);
+    }
+    if (_tab == 1 && _history.isNotEmpty) {
+      return ListView.builder(
+        padding: const EdgeInsets.only(bottom: 20),
+        itemCount: _history.length,
+        itemBuilder: (context, index) {
+          final entry = _history[index];
+          final seconds = entry.positionMs ~/ 1000;
+          final position = seconds > 0
+              ? 'Позиция ${seconds ~/ 60}:${(seconds % 60).toString().padLeft(2, '0')}'
+              : 'Позиция неизвестна';
+          final episode = <String>[
+            if (entry.season != null) 'Сезон ${entry.season}',
+            if (entry.episode != null) 'Серия ${entry.episode}',
+          ].join(' · ');
+          return ListTile(
+            key: ValueKey<String>(
+                '${entry.title.id}:${entry.season}:${entry.episode}'),
+            leading: Poster(
+                url: entry.title.poster, width: 48, height: 68),
+            title: Text(entry.title.title,
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+            subtitle: Text(
+                <String>[if (episode.isNotEmpty) episode, position].join('\n')),
+            isThreeLine: episode.isNotEmpty,
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => openSavedTitle(context, entry.title),
+          );
+        },
+      );
     }
     final emptyText = switch (_tab) {
       1 => 'История пуста',
