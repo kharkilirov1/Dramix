@@ -112,6 +112,15 @@ void main() {
     expect(tracker.snapshot!.completed, isFalse);
   });
 
+  test('late duration metadata cannot reset confirmed playback position', () async {
+    await tracker.accept(event(1, PlaybackEventKind.play, positionMs: 30000));
+    await tracker.accept(event(2, PlaybackEventKind.duration,
+        positionMs: 0, durationMs: 60000));
+    await tracker.flush();
+    expect(saved.last.positionMs, 30000);
+    expect(saved.last.durationMs, 60000);
+  });
+
   test('unbounded positions and invalid duration cannot replace known values', () async {
     await tracker.accept(event(1, PlaybackEventKind.play,
         positionMs: 1000, durationMs: 60000));

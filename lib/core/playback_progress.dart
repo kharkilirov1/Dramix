@@ -104,7 +104,9 @@ class PlaybackProgressTracker {
         event.durationMs! <= _maxMediaMs;
     if (validDuration) _duration = event.durationMs;
     final candidate = event.positionMs;
-    final validPosition = candidate != null && candidate >= 0 &&
+    final carriesPosition = event.kind != PlaybackEventKind.duration &&
+        event.kind != PlaybackEventKind.episodeChanged;
+    final validPosition = carriesPosition && candidate != null && candidate >= 0 &&
         candidate <= _maxMediaMs &&
         (_duration == null || candidate <= _duration! + 2000);
     if (validPosition) {
