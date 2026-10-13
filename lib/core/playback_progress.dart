@@ -9,6 +9,7 @@ class PlaybackProgressSnapshot {
   final String sessionId;
   final String workId;
   final String providerId;
+  final String? variantId;
   final int season;
   final int episode;
   final int positionMs;
@@ -18,6 +19,7 @@ class PlaybackProgressSnapshot {
 
   const PlaybackProgressSnapshot({
     required this.sessionId, required this.workId, required this.providerId,
+    this.variantId,
     required this.season, required this.episode, required this.positionMs,
     required this.durationMs, required this.watchedMs, required this.completed,
   });
@@ -75,6 +77,7 @@ class PlaybackProgressTracker {
     if (!_confirmed || position == null) return null;
     return PlaybackProgressSnapshot(
       sessionId: sessionId, workId: workId, providerId: providerId,
+      variantId: variantId,
       season: season, episode: episode, positionMs: position,
       durationMs: _duration, watchedMs: _watchedMs, completed: _completed,
     );
