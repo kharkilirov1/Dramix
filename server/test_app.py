@@ -333,5 +333,44 @@ class HTTPTests(unittest.TestCase):
                                      {"password": "x" * 70000})[0], 413)
 
 
+    def test_configured_web_origin_receives_cors_and_unknown_origin_is_rejected(self):
+        origin = "http://localhost:8321"
+        self.app.allowed_origins.add(origin)
+        with urlopen(Request(self.base + "/health", headers={"Origin": origin}), timeout=2) as response:
+            self.assertEqual(response.headers["Access-Control-Allow-Origin"], origin)
+            self.assertEqual(response.headers["Vary"], "Origin")
+        req = Request(self.base + "/health", headers={"Origin": "https://evil.example"})
+        with self.assertRaises(HTTPError) as error:
+            urlopen(req, timeout=2)
+        self.assertEqual(error.exception.code, 403)
+        self.assertIsNone(error.exception.headers.get("Access-Control-Allow-Origin"))
+        error.exception.close()
+
+    def test_preflight_allows_auth_idempotency_and_rejects_unknown_headers(self):
+        origin = "http://localhost:8321"
+        self.app.allowed_origins.add(origin)
+        headers = {"Origin": origin, "Access-Control-Request-Method": "PATCH",
+                   "Access-Control-Request-Headers": "authorization, content-type, idempotency-key"}
+        req = Request(self.base + "/v1/library", method="OPTIONS", headers=headers)
+        with urlopen(req, timeout=2) as response:
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.headers["Access-Control-Allow-Origin"], origin)
+            self.assertIn("PATCH", response.headers["Access-Control-Allow-Methods"])
+            self.assertIn("Idempotency-Key", response.headers["Access-Control-Allow-Headers"])
+        headers["Access-Control-Request-Headers"] = "x-unapproved"
+        self.assertEqual(self.request("/v1/library", "OPTIONS", headers=headers)[0], 403)
+        headers["Origin"] = "https://evil.example"
+        self.assertEqual(self.request("/v1/library", "OPTIONS", headers=headers)[0], 403)
+
+    def test_cors_configuration_rejects_wildcard_remote_http_and_path(self):
+        for origin in ("*", "http://remote.example", "https://example.com/path",
+                       "https://user@example.com", "https://example.com:bad"):
+            with self.assertRaises((APIError, ValueError)):
+                Application(self.store, Gateway(""), allowed_origins=[origin])
+        allowed = Application(self.store, Gateway(""),
+                              allowed_origins=["https://app.example", "http://127.0.0.1:8321"])
+        self.assertEqual(len(allowed.allowed_origins), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

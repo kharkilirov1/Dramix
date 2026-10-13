@@ -162,8 +162,26 @@ restrictions: playback still needs a separate client integration.
 The service deliberately binds to loopback. Keep it local until HTTPS,
 reverse-proxy timeouts/request limits, backup/restore, migrations, rate limiting
 across processes, observability and operational review are completed. Standard
-http.server is not an internet-facing production server. Browser CORS is not
-enabled; native clients or a same-origin development proxy can be used initially.
+http.server is not an internet-facing production server.
+
+### Flutter Web development
+
+Browser CORS is disabled by default. To use the optional owned gateway from a
+local Flutter Web build on port 8321, set
+DRAMIX_ALLOWED_ORIGINS=http://localhost:8321 (or the exact 127.0.0.1 origin used).
+Comma-separated origins are supported. HTTPS origins are permitted; HTTP is
+restricted to localhost/127.0.0.1/::1. Wildcards, paths, userinfo and arbitrary
+reflected origins are refused. OPTIONS permits only GET/POST/PATCH/DELETE and
+Content-Type/Authorization/Idempotency-Key. Requests from other browser origins
+return 403; native clients without Origin continue to work. Bearer tokens are
+used explicitly; cookie credential sharing is not enabled.
+
+Set the Flutter owned gateway base to http://127.0.0.1:8080 for native builds or
+the reachable local server origin for Web. Catalog requests then use
+/v1/catalog/list/search/translations and require no Kodik token in Flutter.
+Account/library/checkpoint/comment mutations use the bearer session and revision
+contract documented above. A backend connection does not by itself migrate
+local accounts/history or change playback URLs.
 
 Auth attempts are limited to ten per IP per minute in one process. Password
 reset, email verification, refresh tokens, device management, OAuth, social
