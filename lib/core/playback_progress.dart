@@ -32,6 +32,7 @@ class PlaybackProgressTracker {
   final String sessionId;
   final String workId;
   final String providerId;
+  final String? variantId;
   final int season;
   final int episode;
   final Duration saveInterval;
@@ -40,6 +41,7 @@ class PlaybackProgressTracker {
 
   PlaybackProgressTracker({
     required this.sessionId, required this.workId, required this.providerId,
+    this.variantId,
     required this.season, required this.episode,
     this.saveInterval = const Duration(seconds: 5),
     DateTime Function()? now, this.save,
