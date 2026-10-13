@@ -1,0 +1,42 @@
+name: dramix
+description: "Dramix — клиент для просмотра дорам, сериалов и фильмов на базе Kodik API."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  http: ^1.2.0
+  shared_preferences: ^2.2.3
+  cached_network_image: ^3.3.1
+  webview_flutter: ^4.8.0
+  video_player: ^2.9.1
+  fl_chart: ^0.68.0
+  url_launcher: ^6.3.0
+  web: ^1.1.0
+  collection: ^1.18.0
+
+  # Windows has no webview_flutter implementation; WebView2 through
+  # flutter_inappwebview gives the in-app player.
+  #
+  # media_kit (to make package:video_player work on Windows) is deliberately NOT
+  # used: its Android plugin media_kit_video 2.0.1 does not compile against the
+  # compileSdk 34 that Flutter 3.24 targets, so adding it breaks the Android
+  # build. The WebView2 player covers Windows playback on its own — see README.
+  flutter_inappwebview: ^6.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  video_player_platform_interface: ^6.3.0
+  webview_flutter_platform_interface: ^2.13.0
+
+flutter:
+  uses-material-design: true
