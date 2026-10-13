@@ -1,6 +1,8 @@
 """Deterministic local tests; no Kodik, real credentials or remote network."""
 import json
 import threading
+import tempfile
+import os
 import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -42,32 +44,34 @@ class BackendTests(unittest.TestCase):
             self.store.authenticate(session["token"])
 
     def test_library_is_user_scoped(self):
-        self.store.library_write(self.a, {"work_key": "kinopoisk:123", "favorite": True}, "op-first-01")
+        self.store.library_write(self.a, {"work_key": "kinopoisk:123", "base_revision": 0, "favorite": True}, "op-first-01")
         self.assertEqual(self.store.library_sync(self.b)["items"], [])
         item = self.store.library_sync(self.a)["items"][0]
         self.assertEqual(item["data"]["favorite"], True)
 
     def test_retry_is_idempotent_and_cannot_replay_over_newer_data(self):
-        first = {"work_key": "kinopoisk:123", "favorite": True}
+        first = {"work_key": "kinopoisk:123", "base_revision": 0, "favorite": True}
         result = self.store.library_write(self.a, first, "op-first-01")
-        self.store.library_write(self.a, {"work_key": "kinopoisk:123", "favorite": False}, "op-second-02")
+        self.store.library_write(self.a, {"work_key": "kinopoisk:123", "base_revision": result["revision"], "favorite": False}, "op-second-02")
         retry = self.store.library_write(self.a, first, "op-first-01")
         self.assertEqual(retry, result)
         self.assertFalse(self.store.library_sync(self.a)["items"][0]["data"]["favorite"])
         with self.assertRaises(APIError) as error:
-            self.store.library_write(self.a, {"work_key": "kinopoisk:123", "rating": 4}, "op-first-01")
+            self.store.library_write(self.a, {"work_key": "kinopoisk:123", "base_revision": result["revision"], "rating": 4}, "op-first-01")
         self.assertEqual(error.exception.status, 409)
 
     def test_partial_updates_keep_other_fields_and_delete_syncs_tombstone(self):
         self.store.library_write(self.a, {
-            "work_key": "imdb:tt123", "favorite": True, "status": "watching",
+            "work_key": "imdb:tt123", "base_revision": 0, "favorite": True, "status": "watching",
             "progress": {"season": 2, "episode": 3, "position_ms": 12000, "variant_id": "serial-7"}
         }, "op-first-01")
-        self.store.library_write(self.a, {"work_key": "imdb:tt123", "rating": 5}, "op-second-02")
+        self.store.library_write(self.a, {"work_key": "imdb:tt123",
+            "base_revision": self.store.library_sync(self.a)["items"][0]["revision"],
+            "rating": 5}, "op-second-02")
         page = self.store.library_sync(self.a)
         self.assertTrue(page["items"][0]["data"]["favorite"])
         self.assertEqual(page["items"][0]["data"]["progress"]["season"], 2)
-        deleted = self.store.library_write(self.a, {"work_key": "imdb:tt123"}, "op-delete-03", True)
+        deleted = self.store.library_write(self.a, {"work_key": "imdb:tt123", "base_revision": page["items"][0]["revision"]}, "op-delete-03", True)
         delta = self.store.library_sync(self.a, page["cursor"])
         self.assertEqual(delta["items"], [deleted])
         self.assertEqual(deleted["data"], {})
@@ -75,7 +79,7 @@ class BackendTests(unittest.TestCase):
 
     def test_pagination_advances_without_exposing_another_users_rows(self):
         for i in range(3):
-            self.store.library_write(self.a, {"work_key": f"kodik:{i}", "rating": 3}, f"op-title-{i}")
+            self.store.library_write(self.a, {"work_key": f"kodik:{i}", "base_revision": 0, "rating": 3}, f"op-title-{i}")
         first = self.store.library_sync(self.a, limit=2)
         self.assertTrue(first["has_more"])
         second = self.store.library_sync(self.a, first["cursor"], limit=2)
@@ -86,7 +90,7 @@ class BackendTests(unittest.TestCase):
     def test_invalid_progress_rolls_back_without_an_operation(self):
         with self.assertRaises(APIError):
             self.store.library_write(self.a, {
-                "work_key": "kodik:bad", "progress": {"season": 1, "episode": 0, "position_ms": 0}
+                "work_key": "kodik:bad", "base_revision": 0, "progress": {"season": 1, "episode": 0, "position_ms": 0}
             }, "op-invalid-01")
         self.assertEqual(self.store.library_sync(self.a)["items"], [])
         self.assertEqual(self.store.db.execute("SELECT COUNT(*) FROM operations").fetchone()[0], 0)
@@ -120,6 +124,124 @@ class BackendTests(unittest.TestCase):
         deleted = self.store.comments("kodik:7", 1, 1, reveal=True)["items"][0]
         self.assertTrue(deleted["deleted"])
         self.assertIsNone(deleted["text"])
+
+
+    def test_episode_history_is_separate_from_last_resume(self):
+        first = self.store.library_write(self.a, {
+            "work_key": "kinopoisk:7", "base_revision": 0,
+            "progress": {"season": 1, "episode": 1, "position_ms": 60000}
+        }, "checkpoint-first-01")
+        second = self.store.library_write(self.a, {
+            "work_key": "kinopoisk:7", "base_revision": first["revision"],
+            "progress": {"season": 1, "episode": 2, "position_ms": 90000}
+        }, "checkpoint-second-02")
+        self.store.library_write(self.a, {
+            "work_key": "kinopoisk:7", "base_revision": second["revision"],
+            "progress": {"season": 1, "episode": 1, "position_ms": 120000}
+        }, "checkpoint-third-03")
+        episodes = self.store.checkpoint_sync(self.a)["items"]
+        self.assertEqual({(p["season"], p["episode"]): p["data"]["position_ms"]
+                          for p in episodes}, {(1, 1): 120000, (1, 2): 90000})
+        resume = self.store.library_sync(self.a)["items"][0]["data"]["progress"]
+        self.assertEqual(resume["episode"], 1)
+        self.assertEqual(self.store.checkpoint_sync(self.b)["items"], [])
+
+    def test_stale_patch_and_stale_delete_cannot_replace_current_data(self):
+        first = self.store.library_write(self.a, {
+            "work_key": "kodik:7", "base_revision": 0, "favorite": True
+        }, "revision-first-01")
+        second = self.store.library_write(self.a, {
+            "work_key": "kodik:7", "base_revision": first["revision"], "rating": 4
+        }, "revision-second-02")
+        for delete in (False, True):
+            body = {"work_key": "kodik:7", "base_revision": first["revision"]}
+            if not delete:
+                body["favorite"] = False
+            with self.assertRaises(APIError) as error:
+                self.store.library_write(self.a, body, f"revision-stale-{delete}", delete)
+            self.assertEqual(error.exception.status, 409)
+        self.assertEqual(self.store.library_sync(self.a)["items"][0], second)
+
+    def test_delete_tombstones_episodes_and_requires_explicit_current_restore(self):
+        first_body = {"work_key": "kodik:7", "base_revision": 0,
+                      "progress": {"season": 2, "episode": 3, "position_ms": 4000}}
+        first = self.store.library_write(self.a, first_body, "delete-first-01")
+        checkpoint_cursor = self.store.checkpoint_sync(self.a)["cursor"]
+        deleted = self.store.library_write(self.a, {
+            "work_key": "kodik:7", "base_revision": first["revision"]
+        }, "delete-second-02", True)
+        episodes = self.store.checkpoint_sync(self.a, after=checkpoint_cursor)["items"]
+        self.assertTrue(episodes[0]["deleted"])
+        self.assertEqual(episodes[0]["data"], {})
+        # Replaying a previously successful operation is inert even after delete.
+        self.assertEqual(self.store.library_write(self.a, first_body, "delete-first-01"), first)
+        for revision in (0, first["revision"], deleted["revision"]):
+            with self.assertRaises(APIError) as error:
+                self.store.library_write(self.a, {
+                    "work_key": "kodik:7", "base_revision": revision, "favorite": True
+                }, f"stale-resurrection-{revision}")
+            self.assertEqual(error.exception.status, 409)
+        restored = self.store.library_write(self.a, {
+            "work_key": "kodik:7", "base_revision": deleted["revision"],
+            "restore": True, "favorite": True
+        }, "explicit-restore-01")
+        self.assertFalse(restored["deleted"])
+        self.assertTrue(self.store.checkpoint_sync(self.a)["items"][0]["deleted"])
+
+    def test_atomic_checkpoint_import_preserves_all_episodes_and_explicit_resume(self):
+        points = [{"season": 1, "episode": i, "position_ms": i * 1000}
+                  for i in range(1, 4)]
+        imported = self.store.library_write(self.a, {
+            "work_key": "imdb:tt7", "base_revision": 0,
+            "checkpoints": points, "progress": points[1]
+        }, "import-checkpoints-01")
+        first_page = self.store.checkpoint_sync(self.a, "imdb:tt7", limit=2)
+        second_page = self.store.checkpoint_sync(
+            self.a, "imdb:tt7", first_page["cursor"], limit=2)
+        self.assertTrue(first_page["has_more"])
+        self.assertEqual(len(first_page["items"] + second_page["items"]), 3)
+        self.assertEqual(imported["data"]["progress"]["episode"], 2)
+        self.assertEqual(self.store.library_write(self.a, {
+            "work_key": "imdb:tt7", "base_revision": 0,
+            "checkpoints": points, "progress": points[1]
+        }, "import-checkpoints-01"), imported)
+
+    def test_missing_revision_or_duplicate_import_rejected_without_changes(self):
+        with self.assertRaises(APIError):
+            self.store.library_write(self.a, {
+                "work_key": "kodik:7", "favorite": True
+            }, "missing-revision-01")
+        point = {"season": 1, "episode": 1, "position_ms": 1000}
+        with self.assertRaises(APIError):
+            self.store.library_write(self.a, {
+                "work_key": "kodik:7", "base_revision": 0, "checkpoints": [point, point]
+            }, "duplicate-import-01")
+        self.assertEqual(self.store.library_sync(self.a)["items"], [])
+        self.assertEqual(self.store.checkpoint_sync(self.a)["items"], [])
+
+    def test_checkpoints_survive_restart_and_legacy_pointer_migrates_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "test.sqlite3")
+            original = Store(path)
+            account = original.register({"username": "persist", "password": "persistent-password"})
+            uid = account["user_id"]
+            original.library_write(uid, {
+                "work_key": "kodik:7", "base_revision": 0,
+                "progress": {"season": 1, "episode": 1, "position_ms": 5000}
+            }, "persist-first-01")
+            # Simulate the previous prototype: library pointer but no episode table rows.
+            original.db.execute("DELETE FROM checkpoints")
+            original.db.execute("PRAGMA user_version=1")
+            original.db.close()
+            migrated = Store(path)
+            self.assertEqual(migrated.authenticate(account["token"]), uid)
+            points = migrated.checkpoint_sync(uid)["items"]
+            self.assertEqual(points[0]["data"]["position_ms"], 5000)
+            revision = points[0]["revision"]
+            migrated.db.close()
+            reopened = Store(path)
+            self.assertEqual(reopened.checkpoint_sync(uid)["items"][0]["revision"], revision)
+            reopened.db.close()
 
 
 class GatewayTests(unittest.TestCase):
@@ -201,7 +323,7 @@ class HTTPTests(unittest.TestCase):
         headers = {"Authorization": "Bearer " + session["token"],
                    "Idempotency-Key": "http-operation-01"}
         self.assertEqual(self.request("/v1/library", "PATCH",
-                         {"work_key": "kinopoisk:123", "favorite": True}, headers)[0], 200)
+                         {"work_key": "kinopoisk:123", "base_revision": 0, "favorite": True}, headers)[0], 200)
         status, page = self.request("/v1/library", headers=headers)
         self.assertEqual(page["items"][0]["work_key"], "kinopoisk:123")
         self.assertEqual(self.request("/v1/catalog/list?token=bad")[0], 400)

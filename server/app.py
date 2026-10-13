@@ -79,6 +79,12 @@ class Store:
           revision INTEGER NOT NULL, deleted INTEGER NOT NULL, data TEXT NOT NULL,
           PRIMARY KEY(user_id, work_key));
         CREATE INDEX IF NOT EXISTS library_sync ON library(user_id, revision);
+        CREATE TABLE IF NOT EXISTS checkpoints(
+          user_id TEXT NOT NULL REFERENCES users(id), work_key TEXT NOT NULL,
+          season INTEGER NOT NULL, episode INTEGER NOT NULL,
+          revision INTEGER NOT NULL, deleted INTEGER NOT NULL, data TEXT NOT NULL,
+          PRIMARY KEY(user_id, work_key, season, episode));
+        CREATE INDEX IF NOT EXISTS checkpoints_sync ON checkpoints(user_id, revision);
         CREATE TABLE IF NOT EXISTS operations(
           user_id TEXT NOT NULL REFERENCES users(id), operation_id TEXT NOT NULL,
           fingerprint TEXT NOT NULL, response TEXT NOT NULL,
@@ -96,6 +102,21 @@ class Store:
           user_id TEXT NOT NULL REFERENCES users(id), reason TEXT NOT NULL,
           created REAL NOT NULL, PRIMARY KEY(comment_id, user_id));
         """)
+        # Version 2 adds durable episode checkpoints. Existing prototype
+        # databases retain accounts/library and backfill their last pointer once.
+        if self.db.execute("PRAGMA user_version").fetchone()[0] < 2:
+            with self.transaction():
+                rows = self.db.execute(
+                    "SELECT user_id,work_key,data FROM library WHERE deleted=0").fetchall()
+                for row in rows:
+                    try:
+                        progress = json.loads(row["data"]).get("progress")
+                        if progress is not None:
+                            self.checkpoint_fields(progress)
+                            self.checkpoint_put(row["user_id"], row["work_key"], progress)
+                    except (APIError, ValueError, TypeError, AttributeError):
+                        continue
+                self.db.execute("PRAGMA user_version=2")
         self.dummy_salt = b"dramix-dummy-salt"
         self.dummy_hash = password_hash("dummy-password", self.dummy_salt)
 
@@ -187,44 +208,114 @@ class Store:
                             (uid, operation_id, fingerprint, canonical(response)))
             return response
 
+    @staticmethod
+    def checkpoint_fields(progress):
+        require(isinstance(progress, dict) and
+                set(progress) <= {"season", "episode", "position_ms", "variant_id"})
+        integer(progress.get("season"), 1, 10000)
+        integer(progress.get("episode"), 1, 100000)
+        integer(progress.get("position_ms"), 0, 7 * 86400000)
+        if "variant_id" in progress:
+            require(isinstance(progress["variant_id"], str)
+                    and len(progress["variant_id"]) <= 200)
+        return progress
+
+    def checkpoint_put(self, uid, key, progress):
+        revision = self.db.execute("INSERT INTO revisions DEFAULT VALUES").lastrowid
+        self.db.execute("INSERT OR REPLACE INTO checkpoints VALUES(?,?,?,?,?,?,?)",
+                        (uid, key, progress["season"], progress["episode"],
+                         revision, 0, canonical(progress)))
+
     def library_write(self, uid, body, operation_id, delete=False):
         require(isinstance(body, dict))
         key = work_key(body.get("work_key"))
-        allowed = {"work_key"} if delete else {
-            "work_key", "favorite", "status", "rating", "progress"}
-        require(set(body) <= allowed and (delete or len(body) > 1))
-        patch = {k: v for k, v in body.items() if k != "work_key"}
+        base_revision = integer(body.get("base_revision"))
+        allowed = {"work_key", "base_revision"} if delete else {
+            "work_key", "base_revision", "restore", "favorite", "status",
+            "rating", "progress", "checkpoints"}
+        require(set(body) <= allowed)
+        restore = body.get("restore", False)
+        require(type(restore) is bool)
+        patch = {k: v for k, v in body.items()
+                 if k not in {"work_key", "base_revision", "restore", "checkpoints"}}
+        imports = body.get("checkpoints", [])
+        require(isinstance(imports, list) and len(imports) <= 100)
+        require(delete or bool(patch) or bool(imports))
         if "favorite" in patch:
             require(type(patch["favorite"]) is bool)
         if "status" in patch:
-            require(patch["status"] is None or patch["status"] in STATUSES)
+            require(patch["status"] is None or
+                    isinstance(patch["status"], str) and patch["status"] in STATUSES)
         if "rating" in patch:
             require(patch["rating"] is None or
                     type(patch["rating"]) is int and 1 <= patch["rating"] <= 5)
         if patch.get("progress") is not None:
-            progress = patch["progress"]
-            require(isinstance(progress, dict) and
-                    set(progress) <= {"season", "episode", "position_ms", "variant_id"})
-            integer(progress.get("season"), 1, 10000)
-            integer(progress.get("episode"), 1, 100000)
-            integer(progress.get("position_ms"), 0, 7 * 86400000)
-            if "variant_id" in progress:
-                require(isinstance(progress["variant_id"], str)
-                        and len(progress["variant_id"]) <= 200)
+            self.checkpoint_fields(patch["progress"])
+        seen = set()
+        for progress in imports:
+            self.checkpoint_fields(progress)
+            identity = (progress["season"], progress["episode"])
+            require(identity not in seen, message="Duplicate imported episode")
+            seen.add(identity)
 
         def action():
-            row = self.db.execute("SELECT data,deleted FROM library WHERE user_id=? AND work_key=?",
-                                  (uid, key)).fetchone()
+            row = self.db.execute(
+                "SELECT data,deleted,revision FROM library WHERE user_id=? AND work_key=?",
+                (uid, key)).fetchone()
+            actual_revision = row["revision"] if row else 0
+            require(actual_revision == base_revision, 409,
+                    f"Library revision conflict; current revision is {actual_revision}")
+            require(delete or not row or not row["deleted"] or restore, 409,
+                    "Item was deleted; explicit restore with its current revision is required")
+            require(not restore or row is not None and bool(row["deleted"]), 409,
+                    "Restore requires an existing tombstone")
             data = json.loads(row["data"]) if row and not row["deleted"] else {}
             data.update(patch)
-            revision = self.db.execute("INSERT INTO revisions DEFAULT VALUES").lastrowid
             if delete:
+                episodes = self.db.execute(
+                    "SELECT season,episode FROM checkpoints"
+                    " WHERE user_id=? AND work_key=? AND deleted=0", (uid, key)).fetchall()
+                for episode in episodes:
+                    revision = self.db.execute("INSERT INTO revisions DEFAULT VALUES").lastrowid
+                    self.db.execute(
+                        "UPDATE checkpoints SET revision=?,deleted=1,data='{}'"
+                        " WHERE user_id=? AND work_key=? AND season=? AND episode=?",
+                        (revision, uid, key, episode["season"], episode["episode"]))
                 data = {}
+            else:
+                for progress in imports:
+                    self.checkpoint_put(uid, key, progress)
+                if patch.get("progress") is not None:
+                    self.checkpoint_put(uid, key, patch["progress"])
+            revision = self.db.execute("INSERT INTO revisions DEFAULT VALUES").lastrowid
             self.db.execute("INSERT OR REPLACE INTO library VALUES(?,?,?,?,?)",
                             (uid, key, revision, int(delete), canonical(data)))
             return {"work_key": key, "revision": revision, "deleted": delete, "data": data}
         return self.mutate(uid, operation_id, "library:delete" if delete else "library:patch",
                            body, action)
+
+    def checkpoint_sync(self, uid, key=None, after=0, limit=100):
+        if key is not None:
+            work_key(key)
+        integer(after)
+        integer(limit, 1, 200)
+        with self.lock:
+            sql = "SELECT * FROM checkpoints WHERE user_id=? AND revision>?"
+            params = [uid, after]
+            if key is not None:
+                sql += " AND work_key=?"
+                params.append(key)
+            rows = self.db.execute(sql + " ORDER BY revision LIMIT ?",
+                                   params + [limit + 1]).fetchall()
+        selected = rows[:limit]
+        return {
+            "items": [{"work_key": r["work_key"], "season": r["season"],
+                       "episode": r["episode"], "revision": r["revision"],
+                       "deleted": bool(r["deleted"]), "data": json.loads(r["data"])}
+                      for r in selected],
+            "cursor": selected[-1]["revision"] if selected else after,
+            "has_more": len(rows) > limit,
+        }
 
     def library_sync(self, uid, after=0, limit=100):
         integer(after)
@@ -415,6 +506,13 @@ class Application:
         uid = self.store.authenticate(token)
         if method == "POST" and path == "/v1/auth/logout":
             return self.store.logout(token)
+        if method == "GET" and path == "/v1/checkpoints":
+            try:
+                return self.store.checkpoint_sync(
+                    uid, query.get("work_key"), int(query.get("after", "0")),
+                    int(query.get("limit", "100")))
+            except ValueError:
+                raise APIError(400, "Invalid query") from None
         if path == "/v1/library":
             if method == "GET":
                 try:

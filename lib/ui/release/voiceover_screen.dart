@@ -7,6 +7,26 @@ import '../../core/theme.dart';
 import '../player/player_screen.dart';
 import '../widgets.dart';
 
+
+/// Episode markers use the work identity, while playback retains provider IDs.
+/// The newest checkpoint wins, including an explicit reset to zero.
+Future<Set<String>> startedEpisodesForWork(
+    SavedTitleRef title, List<WatchEntry> history) async {
+  final work = await Library.workId(title.id);
+  final identities = <String, String>{};
+  final seen = <String>{};
+  final started = <String>{};
+  for (final entry in history) {
+    final identity = identities[entry.title.id] ??=
+        await Library.workId(entry.title.id);
+    if (identity != work) continue;
+    final episode = '${entry.season}:${entry.episode}';
+    if (!seen.add(episode)) continue;
+    if (entry.positionMs > 0) started.add(episode);
+  }
+  return started;
+}
+
 /// Выбор озвучки: full-screen list of the dubbing studios Kodik has for this
 /// title, each showing how many episodes it covers.
 class VoiceoverScreen extends StatefulWidget {
@@ -35,7 +55,11 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
       _error = null;
     });
     try {
+      await Library.registerTitle(widget.title.ref);
       final list = await KodikApi.instance.versions(widget.title);
+      for (final version in list) {
+        await Library.registerTitle(version.ref);
+      }
       if (mounted) {
         setState(() {
           _versions = list;
@@ -171,15 +195,14 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
   }
 
   Future<void> _loadLocal() async {
+    await Library.registerTitle(widget.title.ref);
     final resume = await Library.resumePoint(widget.title.id);
     final history = await Library.history();
+    final started = await startedEpisodesForWork(widget.title.ref, history);
     if (!mounted) return;
     setState(() {
       _season ??= resume?.season;
-      _startedEpisodes = history
-          .where((e) => e.title.id == widget.title.id && e.positionMs > 0)
-          .map((e) => '${e.season}:${e.episode}')
-          .toSet();
+      _startedEpisodes = started;
     });
   }
 
