@@ -101,11 +101,15 @@ class PlaybackProgressTracker {
     final oldCompleted = _completed;
     final oldWatched = _watchedMs;
     final validDuration = event.durationMs != null && event.durationMs! > 0 &&
-        event.durationMs! <= _maxMediaMs;
+        event.durationMs! <= _maxMediaMs &&
+        (_position == null || event.durationMs! >= _position!);
+    // Ignore a duration shrink contradicting the known playhead; do not invent
+    // a seek merely to make the metadata fit.
     if (validDuration) _duration = event.durationMs;
     final candidate = event.positionMs;
     final carriesPosition = event.kind != PlaybackEventKind.duration &&
-        event.kind != PlaybackEventKind.episodeChanged;
+        event.kind != PlaybackEventKind.episodeChanged &&
+        event.kind != PlaybackEventKind.error;
     final validPosition = carriesPosition && candidate != null && candidate >= 0 &&
         candidate <= _maxMediaMs &&
         (_duration == null || candidate <= _duration! + 2000);
@@ -113,7 +117,13 @@ class PlaybackProgressTracker {
       _position = _duration == null ? candidate : math.min(candidate!, _duration!);
     }
 
-    if (event.kind == PlaybackEventKind.play) {
+    if (event.kind == PlaybackEventKind.error) {
+      // Provider errors are not fresh position evidence. Preserve the last
+      // confirmed checkpoint and stop counting until another explicit play.
+      _playing = false;
+      _lastSampleAt = null;
+      _lastSamplePosition = null;
+    } else if (event.kind == PlaybackEventKind.play) {
       _confirmed = true;
       _playing = true;
       _completed = false;
@@ -161,7 +171,8 @@ class PlaybackProgressTracker {
     }
     if (snapshot == null) return Future<void>.value();
     if (event.kind == PlaybackEventKind.pause ||
-        event.kind == PlaybackEventKind.ended) return flush();
+        event.kind == PlaybackEventKind.ended ||
+        event.kind == PlaybackEventKind.error) return flush();
     return _schedule();
   }
 

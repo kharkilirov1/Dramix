@@ -121,6 +121,27 @@ void main() {
     expect(saved.last.durationMs, 60000);
   });
 
+  test('contradictory shorter duration does not fabricate a seek', () async {
+    await tracker.accept(event(1, PlaybackEventKind.play,
+        positionMs: 30000, durationMs: 60000));
+    await tracker.accept(event(2, PlaybackEventKind.duration, durationMs: 10000));
+    await tracker.flush();
+    expect(saved.last.positionMs, 30000);
+    expect(saved.last.durationMs, 60000);
+  });
+
+  test('error flushes known progress and stops watch continuity', () async {
+    await tracker.accept(event(1, PlaybackEventKind.play, positionMs: 1000));
+    now = now.add(const Duration(seconds: 1));
+    await tracker.accept(event(2, PlaybackEventKind.time, positionMs: 2000));
+    await tracker.accept(event(3, PlaybackEventKind.error, positionMs: 0));
+    expect(saved.last.positionMs, 2000);
+    expect(saved.last.watchedMs, 1000);
+    now = now.add(const Duration(seconds: 1));
+    await tracker.accept(event(4, PlaybackEventKind.time, positionMs: 3000));
+    expect(tracker.snapshot!.watchedMs, 1000);
+  });
+
   test('unbounded positions and invalid duration cannot replace known values', () async {
     await tracker.accept(event(1, PlaybackEventKind.play,
         positionMs: 1000, durationMs: 60000));
