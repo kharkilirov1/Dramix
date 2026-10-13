@@ -23,7 +23,7 @@ class BackendComments {
     if (origin.host.isEmpty || origin.userInfo.isNotEmpty || origin.hasQuery || origin.hasFragment ||
         (origin.path.isNotEmpty && origin.path != '/') ||
         !(origin.scheme == 'https' || (origin.scheme == 'http' &&
-          ['localhost', '127.0.0.1', '::1'].contains(origin.host)))) {
+          ['localhost', '127.0.0.1', '::1', '[::1]'].contains(origin.host)))) {
       throw const CommentsError(null, 'Недопустимый адрес сервера.');
     }
     return origin.replace(path: path, queryParameters: query);
@@ -33,6 +33,8 @@ class BackendComments {
       {Map<String, String>? query, Map<String, dynamic>? body,
        CommentOperation? operation}) async {
     final request = http.Request(method, _uri(path, query));
+    // Never forward owned-server credentials through redirect responses.
+    request.followRedirects = false;
     request.headers['Content-Type'] = 'application/json';
     if (operation != null) {
       final currentToken = token();
