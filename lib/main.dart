@@ -119,12 +119,16 @@ class _AppGateState extends State<AppGate> {
     );
     controller.dispose();
     if (value == null || value.isEmpty) return;
-    final ok = await KodikApi.instance.tokens.setUserToken(value);
-    if (!mounted) return;
-    if (ok) {
-      await _boot();
-    } else {
-      showMessage(context, 'Токен не подошёл');
+    try {
+      final ok = await KodikApi.instance.tokens.setUserToken(value);
+      if (!mounted) return;
+      if (ok) {
+        await _boot();
+      } else {
+        showMessage(context, 'Токен не подошёл');
+      }
+    } on KodikTokenException catch (e) {
+      if (mounted) showMessage(context, e.message);
     }
   }
 

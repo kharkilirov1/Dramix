@@ -89,7 +89,18 @@ class KodikApi {
 
   /// Follows a `next_page` link returned by [fetch] or [search].
   Future<KodikPage> nextPage(String url) async {
-    return KodikPage.fromJson(_asMap(await _request(Uri.parse(url))));
+    final uri = Uri.tryParse(url);
+    final origin = Uri.parse(base);
+    if (uri == null ||
+        uri.scheme != origin.scheme ||
+        uri.host != origin.host ||
+        uri.port != origin.port ||
+        uri.userInfo.isNotEmpty ||
+        uri.fragment.isNotEmpty ||
+        (uri.path != '/list' && uri.path != '/search')) {
+      throw const KodikApiException(-1, 'Некорректная ссылка следующей страницы');
+    }
+    return KodikPage.fromJson(_asMap(await _request(uri)));
   }
 
   /// Free-text search. `title` is only honoured by `/search`, not `/list`.
@@ -217,10 +228,10 @@ class KodikApi {
     final token = await tokens.ensure();
     final resp = await _send(_withToken(uri, token));
 
-    if (resp.statusCode == 401 && retry) {
-      // Token was revoked between validation and use — resolve a fresh one.
+    if (resp.statusCode == 401) {
+      // Remember every rejection, including a failed replacement token.
       await tokens.invalidate(rejected: token);
-      return _request(uri, retry: false);
+      if (retry) return _request(uri, retry: false);
     }
     if (resp.statusCode != 200) {
       throw KodikApiException(resp.statusCode, _describe(resp));

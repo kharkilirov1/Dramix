@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -293,4 +295,269 @@ void main() {
           throwsA(isA<KodikApiException>()));
     });
   });
+
+  group('token recovery reliability', () {
+    test('concurrent callers share one validation request', () async {
+      final started = Completer<void>();
+      final response = Completer<http.Response>();
+      var requests = 0;
+      final client = MockClient((_) async {
+        requests++;
+        if (!started.isCompleted) started.complete();
+        return response.future;
+      });
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      final first = store.ensure();
+      await started.future;
+      final second = store.ensure(forceRefresh: true);
+      expect(identical(first, second), isTrue);
+      response.complete(jsonResponse(const {'total': 0, 'results': []}));
+      expect(await Future.wait([first, second]), [t0, t0]);
+      expect(requests, 1);
+    });
+
+    test('a delayed rejection does not clear a newer accepted token', () async {
+      final client = MockClient(
+          (_) async => jsonResponse(const {'total': 0, 'results': []}));
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      expect(await store.ensure(), t0);
+      expect(await store.setUserToken(t1), isTrue);
+      await store.invalidate(rejected: t0);
+      expect(store.token, t1);
+      expect(await store.ensure(), t1);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('kodik.token.cache'), t1);
+    });
+
+    test('a revoked user token is not offered again during recovery', () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'kodik.token.user': t0,
+      });
+      final probes = <String>[];
+      final client = MockClient((req) async {
+        probes.add(req.url.queryParameters['token']!);
+        return jsonResponse(const {'total': 0, 'results': []});
+      });
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      expect(await store.ensure(), t0);
+      await store.invalidate(rejected: t0);
+      expect(await store.ensure(), t1);
+      expect(probes, [t0, t1]);
+    });
+
+    test('server outage stops candidate churn and allows a later retry',
+        () async {
+      var unavailable = true;
+      final probes = <String>[];
+      final client = MockClient((req) async {
+        probes.add(req.url.queryParameters['token']!);
+        return unavailable
+            ? jsonResponse(const {'error': 'unavailable'}, 503)
+            : jsonResponse(const {'total': 0, 'results': []});
+      });
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      await expectLater(
+          store.ensure(), throwsA(isA<KodikTokenUnavailableException>()));
+      expect(probes, [t0]);
+      expect(store.hasToken, isFalse);
+      unavailable = false;
+      expect(await store.ensure(), t0);
+      expect(probes, [t0, t0]);
+    });
+
+    test('network failures do not test subsequent credentials', () async {
+      var requests = 0;
+      final store = KodikTokenStore(
+        client: MockClient((_) async {
+          requests++;
+          throw http.ClientException('offline');
+        }),
+        candidates: candidates,
+      );
+      await expectLater(
+          store.ensure(), throwsA(isA<KodikTokenUnavailableException>()));
+      expect(requests, 1);
+    });
+
+    test('HTTP 200 HTML is not accepted as a validated token', () async {
+      final store = KodikTokenStore(
+        client: MockClient((_) async => http.Response('<html>proxy</html>', 200)),
+        candidates: candidates,
+      );
+      await expectLater(
+          store.ensure(), throwsA(isA<KodikTokenUnavailableException>()));
+      expect(store.hasToken, isFalse);
+    });
+
+    test('HTTP 200 error JSON is not accepted as a validated token', () async {
+      final store = KodikTokenStore(
+        client: MockClient((_) async =>
+            jsonResponse(const {'error': 'denied', 'total': 0, 'results': []})),
+        candidates: candidates,
+      );
+      await expectLater(
+          store.ensure(), throwsA(isA<KodikTokenUnavailableException>()));
+      expect(store.hasToken, isFalse);
+    });
+
+    test('an empty valid result page still validates a token', () async {
+      final store = KodikTokenStore(
+        client: MockClient(
+            (_) async => jsonResponse(const {'total': 0, 'results': []})),
+      );
+      expect(await store.validate(t0), isTrue);
+    });
+  });
+
+  group('in-flight token generations', () {
+    test('duplicate rejection does not cancel in-flight token recovery',
+        () async {
+      final started = Completer<void>();
+      final response = Completer<http.Response>();
+      var recoveries = 0;
+      final client = MockClient((req) async {
+        if (req.url.queryParameters['token'] == t1) {
+          recoveries++;
+          if (!started.isCompleted) started.complete();
+          return response.future;
+        }
+        return jsonResponse(const {'total': 0, 'results': []});
+      });
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      expect(await store.ensure(), t0);
+      await store.invalidate(rejected: t0);
+      final first = store.ensure();
+      await started.future;
+      await store.invalidate(rejected: t0);
+      final second = store.ensure();
+      response.complete(jsonResponse(const {'total': 0, 'results': []}));
+      expect(await Future.wait([first, second]), [t1, t1]);
+      expect(recoveries, 1);
+    });
+
+    test('a stale resolver cannot replace a newly entered user token',
+        () async {
+      final started = Completer<void>();
+      final response = Completer<http.Response>();
+      final client = MockClient((req) async {
+        if (req.url.queryParameters['token'] == t0) {
+          if (!started.isCompleted) started.complete();
+          return response.future;
+        }
+        return jsonResponse(const {'total': 0, 'results': []});
+      });
+      final store = KodikTokenStore(client: client, candidates: candidates);
+      final resolving = store.ensure();
+      await started.future;
+      expect(await store.setUserToken(t1), isTrue);
+      response.complete(jsonResponse(const {'total': 0, 'results': []}));
+      expect(await resolving, t1);
+      expect(store.token, t1);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('kodik.token.cache'), t1);
+    });
+  });
+
+  group('user token transient errors', () {
+    test('user token validation reports outage without deleting saved settings',
+        () async {
+      SharedPreferences.setMockInitialValues(<String, Object>{
+        'kodik.token.user': t1,
+      });
+      final store = KodikTokenStore(
+        client: MockClient((_) async =>
+            jsonResponse(const {'error': 'unavailable'}, 503)),
+      );
+      await expectLater(store.setUserToken(t0),
+          throwsA(isA<KodikTokenUnavailableException>()));
+      expect(await store.userToken(), t1);
+    });
+  });
+
+  group('concurrent API recovery', () {
+    test('simultaneous API 401 responses share one replacement validation',
+        () async {
+      final rejectedRequests = Completer<void>();
+      final recoveryStarted = Completer<void>();
+      final replacement = Completer<http.Response>();
+      var oldRequests = 0;
+      var replacementProbes = 0;
+      final client = MockClient((req) async {
+        final token = req.url.queryParameters['token'];
+        if (isProbe(req.url)) {
+          if (token == t1) {
+            replacementProbes++;
+            if (!recoveryStarted.isCompleted) recoveryStarted.complete();
+            return replacement.future;
+          }
+          return jsonResponse(const {'total': 0, 'results': []});
+        }
+        if (token == t0) {
+          oldRequests++;
+          if (oldRequests == 2) rejectedRequests.complete();
+          await rejectedRequests.future;
+          if (req.url.queryParameters['title'] == 'second') {
+            await recoveryStarted.future;
+          }
+          return jsonResponse(const {'error': 'revoked'}, 401);
+        }
+        return jsonResponse(const {'total': 0, 'results': []});
+      });
+      final api = apiWith(client);
+      final first = api.search(query: 'first');
+      final second = api.search(query: 'second');
+      await recoveryStarted.future;
+      // Let the delayed second 401 join the still-pending recovery.
+      await Future<void>.delayed(Duration.zero);
+      replacement.complete(jsonResponse(const {'total': 0, 'results': []}));
+      final pages = await Future.wait([first, second]);
+      expect(pages, hasLength(2));
+      expect(api.tokens.token, t1);
+      expect(replacementProbes, 1);
+    });
+
+    test('a rejected replacement is invalidated without a third API attempt',
+        () async {
+      var calls = 0;
+      final client = MockClient((req) async {
+        if (isProbe(req.url)) {
+          return jsonResponse(const {'total': 0, 'results': []});
+        }
+        calls++;
+        return jsonResponse(const {'error': 'revoked'}, 401);
+      });
+      final api = apiWith(client);
+      await expectLater(
+          api.search(query: 'x'), throwsA(isA<KodikApiException>()));
+      expect(calls, 2);
+      expect(api.tokens.hasToken, isFalse);
+      final prefs = await SharedPreferences.getInstance();
+      expect(prefs.getString('kodik.token.cache'), isNull);
+    });
+  });
+
+  group('cursor origin restrictions', () {
+    test('rejects unsafe cursors before validation or network requests',
+        () async {
+      var requests = 0;
+      final client = MockClient((_) async {
+        requests++;
+        return jsonResponse(const {'total': 0, 'results': []});
+      });
+      final api = apiWith(client);
+      for (final url in [
+        'https://example.com/list?next=x',
+        'http://kodik-api.com/list?next=x',
+        'https://kodik-api.com:8443/list?next=x',
+        'https://user@kodik-api.com/list?next=x',
+        'https://kodik-api.com.evil.test/list?next=x',
+        'https://kodik-api.com/translations',
+        '/list?next=x',
+      ]) {
+        await expectLater(api.nextPage(url), throwsA(isA<KodikApiException>()));
+      }
+      expect(requests, 0);
+    });
+  });
+
 }

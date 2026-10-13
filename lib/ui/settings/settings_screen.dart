@@ -103,10 +103,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
       showMessage(context, 'Пользовательский токен удалён');
       return;
     }
-    final ok = await KodikApi.instance.tokens.setUserToken(trimmed);
-    if (!mounted) return;
-    if (ok) setState(() => _userTokenSet = true);
-    showMessage(context, ok ? 'Токен принят' : 'Токен не подошёл');
+    try {
+      final ok = await KodikApi.instance.tokens.setUserToken(trimmed);
+      if (!mounted) return;
+      if (ok) setState(() => _userTokenSet = true);
+      showMessage(context, ok ? 'Токен принят' : 'Токен не подошёл');
+    } on KodikTokenException catch (e) {
+      if (mounted) showMessage(context, e.message);
+    }
   }
 
   Future<void> _confirm(String title, String message, Future<void> Function() run) async {
