@@ -37,6 +37,7 @@ class BackendSync {
       var cursor = 0;
       var pages = 0;
       while (true) {
+        if (_scope != scope) throw StateError('Account changed before sync request');
         if (++pages > 10000) throw const FormatException('Too many pages');
         final page = await session.request('GET', '/v1/$feed',
             query: {'after': '$cursor', 'limit': '100'});
@@ -75,10 +76,13 @@ class BackendSync {
     final prefs = await SharedPreferences.getInstance();
     final pendingKey = '$scope.pending';
     final pendingRaw = prefs.getString(pendingKey);
+    if (_scope != scope) throw StateError('Account changed before import');
     if (pendingRaw != null && (jsonDecode(pendingRaw) as List).isNotEmpty) {
       return retryPending();
     }
+    if (_scope != scope) throw StateError('Account changed before import');
     await pull();
+    if (_scope != scope) throw StateError('Account changed during import');
     final remote = (await snapshot())['library'] as Map;
     final bodies = <String, Map<String, dynamic>>{};
     Map<String, dynamic> body(String work) => bodies.putIfAbsent(work, () =>
@@ -157,10 +161,12 @@ class BackendSync {
     final scope = _scope;
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString('$scope.pending');
+    if (_scope != scope) throw StateError('Account changed before retry');
     if (raw == null) return 0;
     final pending = (jsonDecode(raw) as List).cast<Map>();
     var completed = 0;
     while (pending.isNotEmpty) {
+      if (_scope != scope) throw StateError('Account changed before retry request');
       final op = pending.first;
       final body = (op['body'] as Map).cast<String, dynamic>();
       try {

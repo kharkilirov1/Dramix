@@ -29,6 +29,7 @@ class BackendSession {
   }
   final Uri origin;
   final http.Client client;
+  int _generation = 0;
   String? _token;
   String? userId;
   String? username;
@@ -40,7 +41,7 @@ class BackendSession {
         (origin.path.isNotEmpty && origin.path != '/') ||
         (origin.scheme != 'https' &&
           !(origin.scheme == 'http' &&
-            ['localhost', '127.0.0.1', '::1'].contains(origin.host)))) {
+            ['localhost', '127.0.0.1', '::1', '[::1]'].contains(origin.host)))) {
       throw ArgumentError('Use HTTPS or a local loopback backend origin');
     }
   }
@@ -53,10 +54,13 @@ class BackendSession {
     if (auth && !authenticated) {
       throw const BackendError(401, 'Войдите в аккаунт сервера.');
     }
+    final generation = _generation;
+    final actorToken = _token;
+    final actorUser = userId;
     final req = http.Request(method, origin.replace(path: path, queryParameters: query));
     req.followRedirects = false;
     req.headers['Accept'] = 'application/json';
-    if (auth) req.headers['Authorization'] = 'Bearer $_token';
+    if (auth) req.headers['Authorization'] = 'Bearer $actorToken';
     if (operationKey != null) req.headers['Idempotency-Key'] = operationKey;
     if (body != null) {
       req.headers['Content-Type'] = 'application/json';
@@ -65,6 +69,9 @@ class BackendSession {
     final response = await http.Response.fromStream(
         await client.send(req).timeout(const Duration(seconds: 15)))
         .timeout(const Duration(seconds: 15));
+    if (auth && (generation != _generation || actorToken != _token || actorUser != userId)) {
+      throw StateError('Account changed during request');
+    }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       if (response.statusCode == 401 && auth) _clear();
       // Do not display upstream bodies which might contain private information.
@@ -76,9 +83,12 @@ class BackendSession {
     return decoded.cast<String, dynamic>();
   }
   Future<void> signIn(String name, String password, {bool register = false}) async {
+    _clear();
+    final generation = _generation;
     final result = await request('POST',
         register ? '/v1/auth/register' : '/v1/auth/login',
         body: {'username': name.trim(), 'password': password}, auth: false);
+    if (generation != _generation) throw StateError('Account changed during sign-in');
     if (result['token'] is! String || result['user_id'] is! String ||
         result['expires_at'] is! num) {
       throw const FormatException('Invalid session response');
@@ -90,12 +100,13 @@ class BackendSession {
         ((result['expires_at'] as num) * 1000).round());
   }
   Future<void> logout() async {
+    final generation = _generation;
     try {
       if (authenticated) await request('POST', '/v1/auth/logout', body: {});
     } finally {
-      _clear();
+      if (_generation == generation) _clear();
     }
   }
-  void _clear() { _token = null; userId = null; username = null; expiresAt = null; }
+  void _clear() { _generation++; _token = null; userId = null; username = null; expiresAt = null; }
   void close() { _clear(); client.close(); }
 }
