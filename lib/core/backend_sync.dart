@@ -9,6 +9,7 @@ import 'models.dart';
 /// schedule background work, or claim a bidirectional offline sync engine.
 class BackendSync {
   final BackendSession session;
+  int skippedHistoryPoints = 0;
   BackendSync(this.session);
   String get _scope {
     if (!session.authenticated) throw const BackendError(401, 'Войдите в аккаунт.');
@@ -93,6 +94,7 @@ class BackendSync {
       final known = await Library.workId(title.id);
       return canonical(known == title.id ? title.workId : known);
     }
+    skippedHistoryPoints = 0;
     final history = await Library.history();
     for (final title in await Library.favorites()) {
       final b = body(await identity(title));
@@ -115,7 +117,10 @@ class BackendSync {
       final rating = await Library.rating(point.title.id);
       if (rating != null) b['rating'] = rating;
       if (point.season == null || point.episode == null ||
-          point.season! < 1 || point.episode! < 1 || point.positionMs < 0) continue;
+          point.season! < 1 || point.episode! < 1 || point.positionMs < 0) {
+        skippedHistoryPoints++;
+        continue;
+      }
       final checkpoint = {
         'season': point.season, 'episode': point.episode,
         'position_ms': point.positionMs, 'variant_id': point.title.id,
@@ -127,6 +132,8 @@ class BackendSync {
       // Library history is most-recent-first; no resume from episode numbering.
       b.putIfAbsent('progress', () => checkpoint);
     }
+    // Legacy history without metadata/checkpoints must not enqueue an empty PATCH.
+    bodies.removeWhere((_, value) => value.length == 2);
     for (final work in bodies.keys) {
       if (remote.containsKey(work)) throw BackendConflict(work);
       final points = bodies[work]!['checkpoints'] as List?;

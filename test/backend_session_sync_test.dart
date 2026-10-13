@@ -155,4 +155,45 @@ void main() {
     session.close();
   });
 
+  test('invalid legacy history is skipped while valid favorite imports once', () async {
+    final history = [jsonEncode({
+      'title': {'id': 'legacy', 'title': 'Legacy'},
+      'positionMs': 3000, 'watchedAt': '2025-01-01T00:00:00.000',
+    })];
+    final favorites = [jsonEncode({'id': 'valid', 'title': 'Favorite'})];
+    SharedPreferences.setMockInitialValues({
+      'dramix.history': history, 'dramix.favorites': favorites,
+    });
+    final patches = <Map>[];
+    final session = BackendSession(Uri.parse('http://localhost:8080'),
+      client: MockClient((request) async {
+        if (request.url.path.contains('/auth/')) {
+          return http.Response(jsonEncode(credentials('a')), 200);
+        }
+        if (request.method == 'PATCH') {
+          patches.add(jsonDecode(request.body) as Map);
+          return http.Response('{}', 200);
+        }
+        return http.Response(jsonEncode({
+          'items': [], 'cursor': 0, 'has_more': false,
+        }), 200);
+      }));
+    await session.signIn('a', 'fixture-password');
+    final sync = BackendSync(session);
+    expect(await sync.importGuest(), 1);
+    expect(sync.skippedHistoryPoints, 1);
+    expect(patches.single['work_key'], 'kodik:valid');
+    expect(patches.single['favorite'], true);
+    final prefs = await SharedPreferences.getInstance();
+    expect(prefs.getStringList('dramix.history'), history);
+    final scope = 'dramix.cloud.v1.${Uri.encodeComponent(session.origin.toString())}.a';
+    final originalBackup = prefs.getString('$scope.guestBackup');
+    expect((jsonDecode(originalBackup!) as Map)['dramix.history'], history);
+    // A later import does not replace the original backup.
+    await prefs.setStringList('dramix.history', []);
+    await sync.importGuest();
+    expect(prefs.getString('$scope.guestBackup'), originalBackup);
+    session.close();
+  });
+
 }
