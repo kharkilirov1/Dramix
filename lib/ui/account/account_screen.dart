@@ -46,7 +46,9 @@ class _AccountScreenState extends State<AccountScreen> {
     if (confirmed != true || !mounted) return;
     await run(() async {
       final count = await sync.importGuest();
-      message = 'Импортировано записей: $count. Локальная библиотека сохранена.';
+      message = 'Импортировано записей: $count. '
+          'Пропущено точек без корректного сезона/серии: ${sync.skippedHistoryPoints}. '
+          'Локальная библиотека сохранена.';
     });
   }
   @override

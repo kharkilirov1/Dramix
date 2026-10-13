@@ -35,3 +35,7 @@ reconciliation UI; do not retry with a guessed new revision.
 
 Tests use MockClient and SharedPreferences mocks, with no real network/secret.
 Flutter runtime/analyzer were unavailable during editing; CI must validate.
+
+Legacy invalid episode points are counted and reported by the import panel. Their
+raw guest data remains in the immutable backup. Works with no valid importable
+fields are not queued, avoiding permanent empty PATCH failures.
