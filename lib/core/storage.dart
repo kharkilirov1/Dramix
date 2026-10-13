@@ -130,7 +130,10 @@ class Library {
     final raw = prefs.getString(_aliasesKey);
     if (raw == null) return <String, String>{};
     final decoded = jsonDecode(raw);
-    if (decoded is! Map) throw const FormatException('Invalid work aliases');
+    if (decoded is! Map || decoded.entries.any((e) =>
+        e.key is! String || e.value is! String || (e.value as String).isEmpty)) {
+      throw const FormatException('Invalid work aliases');
+    }
     return <String, String>{
       for (final e in decoded.entries)
         if (e.value is String) '${e.key}': e.value as String,
@@ -173,6 +176,7 @@ class Library {
       (id.startsWith('kodik:') ? aliases[id.substring(6)] : null) ?? id;
 
   static Future<String> workId(String id) async {
+    await _historyWrites;
     final prefs = await SharedPreferences.getInstance();
     return _resolveKey(id, _aliases(prefs));
   }
@@ -182,11 +186,12 @@ class Library {
 
   static Future<List<WatchEntry>> continueWatching({int limit = 12}) async {
     if (limit <= 0) return <WatchEntry>[];
+    final entries = await history();
     final prefs = await SharedPreferences.getInstance();
     final aliases = _aliases(prefs);
     final seen = <String>{};
     final out = <WatchEntry>[];
-    for (final entry in await history()) {
+    for (final entry in entries) {
       final key = _identity(entry.title, aliases);
       if (!seen.add(key)) continue;
       // The latest checkpoint wins, including an intentional reset to zero.
@@ -200,6 +205,11 @@ class Library {
   // --------------------------------------------------------------- history
 
   static Future<List<WatchEntry>> history() async {
+    await _historyWrites;
+    return _history();
+  }
+
+  static Future<List<WatchEntry>> _history() async {
     final prefs = await SharedPreferences.getInstance();
     return _decodeList(prefs.getStringList(_historyKey))
         .map(WatchEntry.fromJson)
@@ -232,11 +242,27 @@ class Library {
 
   /// Most recent checkpoint for a title, used for "continue watching".
   static Future<WatchEntry?> resumePoint(String titleId) async {
+    final entries = await history();
     final prefs = await SharedPreferences.getInstance();
     final aliases = _aliases(prefs);
     final target = _resolveKey(titleId, aliases);
-    for (final e in await history()) {
+    for (final e in entries) {
       if (e.title.id == titleId || _identity(e.title, aliases) == target) return e;
+    }
+    return null;
+  }
+
+
+  /// Exact episode checkpoint across known dubbing aliases.
+  static Future<WatchEntry?> episodeCheckpoint(
+      String titleId, int? season, int? episode) async {
+    final entries = await history();
+    final prefs = await SharedPreferences.getInstance();
+    final aliases = _aliases(prefs);
+    final target = _resolveKey(titleId, aliases);
+    for (final entry in entries) {
+      if ((entry.title.id == titleId || _identity(entry.title, aliases) == target) &&
+          entry.season == season && entry.episode == episode) return entry;
     }
     return null;
   }
@@ -259,6 +285,11 @@ class Library {
   // ------------------------------------------------------------- favourites
 
   static Future<List<SavedTitleRef>> favorites() async {
+    await _historyWrites;
+    return _favorites();
+  }
+
+  static Future<List<SavedTitleRef>> _favorites() async {
     final prefs = await SharedPreferences.getInstance();
     return _decodeList(prefs.getStringList(_favoritesKey))
         .map(SavedTitleRef.fromJson)
@@ -266,10 +297,11 @@ class Library {
   }
 
   static Future<bool> isFavorite(String id) async {
+    final entries = await favorites();
     final prefs = await SharedPreferences.getInstance();
     final aliases = _aliases(prefs);
     final target = _resolveKey(id, aliases);
-    for (final e in await favorites()) {
+    for (final e in entries) {
       if (e.id == id || _identity(e, aliases) == target) return true;
     }
     return false;
@@ -279,7 +311,7 @@ class Library {
   static Future<bool> toggleFavorite(SavedTitleRef title) => _mutateHistory(() async {
     await _registerTitle(title);
     final prefs = await SharedPreferences.getInstance();
-    final list = await favorites();
+    final list = await _favorites();
     final aliases = _aliases(prefs);
     final target = _identity(title, aliases);
     final exists = list.any((e) => _identity(e, aliases) == target);
@@ -342,6 +374,7 @@ class Library {
   }
 
   static Future<int?> watchStatus(String id) async {
+    await _historyWrites;
     final entries = await _listEntries();
     if (entries.containsKey(id)) return entries[id]!.status;
     final prefs = await SharedPreferences.getInstance();
@@ -371,6 +404,7 @@ class Library {
   });
 
   static Future<List<SavedTitleRef>> list(WatchStatus status) async {
+    await _historyWrites;
     final entries = await _listEntries();
     return entries.values
         .where((e) => e.status == status.value)
@@ -406,6 +440,7 @@ class Library {
 
   /// The user's own 1–5 score for a title, if they set one.
   static Future<int?> rating(String id) async {
+    await _historyWrites;
     final all = await _ratings();
     final key = await workId(id);
     if (all.containsKey(key)) return all[key];
