@@ -156,30 +156,32 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
         children: [
           Expanded(
             child: Semantics(
-              button: true,
+              button: onSearch != null,
               child: InkWell(
-              borderRadius: BorderRadius.circular(24),
-              onTap: onSearch,
-              child: Container(
-                constraints: const BoxConstraints(minHeight: 48),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: BorderRadius.circular(24),
-                ),
-                child: Row(children: [
-                  const Icon(Icons.search, size: 22, color: AppColors.textTertiary),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(searchHint,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            fontSize: 15, color: AppColors.textTertiary)),
+                borderRadius: BorderRadius.circular(24),
+                onTap: onSearch,
+                child: Container(
+                  constraints: const BoxConstraints(minHeight: 48),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(24),
                   ),
-                ]),
+                  child: Row(children: [
+                    const Icon(Icons.search,
+                        size: 22, color: AppColors.textTertiary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(searchHint,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 15, color: AppColors.textTertiary)),
+                    ),
+                  ]),
+                ),
               ),
-            ),
             ),
           ),
           IconButton(

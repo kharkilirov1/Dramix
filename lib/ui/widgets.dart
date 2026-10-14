@@ -698,11 +698,12 @@ class CollectionCard extends StatelessWidget {
     final seed = collection.id.codeUnits.fold<int>(0, (a, b) => a + b);
     final gradient = _gradients[seed % _gradients.length];
     final src = (image ?? '').trim();
-    return GestureDetector(
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
       onTap: onTap,
       child: Container(
         margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
-        height: 190,
+        height: 150 + MediaQuery.textScalerOf(context).scale(50),
         child: Stack(fit: StackFit.expand, children: [
           ClipRRect(
             borderRadius: BorderRadius.circular(18),
@@ -780,7 +781,7 @@ class CollectionCard extends StatelessWidget {
                 Text(collection.subtitle,
                     style: const TextStyle(
                         fontSize: 12.5, color: AppColors.textSecondary),
-                    maxLines: 1,
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis),
               ],
             ),
