@@ -38,6 +38,7 @@ class _SearchScreenState extends State<SearchScreen> {
 
   /// Committed query — only replaced by [_run] / [_reset], never in `build`.
   String _q = '';
+  int _queryGeneration = 0;
 
   List<String> _history = const <String>[];
 
@@ -68,9 +69,11 @@ class _SearchScreenState extends State<SearchScreen> {
   Future<void> _run() async {
     final q = _controller.text.trim();
     if (q.isEmpty) return;
+    final request = ++_queryGeneration;
+    FocusScope.of(context).unfocus();
     await Library.rememberSearch(q);
     final list = await Library.searchHistory();
-    if (!mounted) return;
+    if (!mounted || request != _queryGeneration) return;
     setState(() {
       _q = q;
       _searched = true;
@@ -79,6 +82,7 @@ class _SearchScreenState extends State<SearchScreen> {
   }
 
   void _reset() {
+    ++_queryGeneration;
     _controller.clear();
     setState(() {
       _searched = false;
@@ -129,9 +133,9 @@ class _SearchScreenState extends State<SearchScreen> {
                   autofocus: true,
                   textInputAction: TextInputAction.search,
                   style: const TextStyle(fontSize: 16),
-                  decoration: const InputDecoration(
-                      hintText: 'Поиск дорам',
-                      hintStyle: TextStyle(color: AppColors.textTertiary),
+                  decoration: InputDecoration(
+                      hintText: 'Поиск: ${_scopeLabels[_scope].toLowerCase()}',
+                      hintStyle: const TextStyle(color: AppColors.textTertiary),
                       border: InputBorder.none),
                   onSubmitted: (_) => _run(),
                 ),
@@ -148,36 +152,11 @@ class _SearchScreenState extends State<SearchScreen> {
             ]),
           ),
           const Divider(height: 1, color: AppColors.outline),
-          SizedBox(
-            height: 44,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                const SizedBox(width: 16),
-                for (final (i, label) in _scopeLabels.indexed) ...[
-                  GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => setState(() {
-                      _scope = i;
-                    }),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 10),
-                      child: Text(label,
-                          style: TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: _scope == i
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                              color: _scope == i
-                                  ? AppColors.textPrimary
-                                  : AppColors.textTertiary)),
-                    ),
-                  ),
-                  const SizedBox(width: 14),
-                ],
-              ]),
-            ),
+          UnderlineTabs(
+            tabs: _scopeLabels,
+            selected: _scope,
+            separator: 14,
+            onChanged: (scope) => setState(() => _scope = scope),
           ),
           Expanded(child: _results()),
         ]),
@@ -201,9 +180,16 @@ class _SearchScreenState extends State<SearchScreen> {
 
   /// История запросов (эталон: скриншот 08).
   Widget _historyView() {
-    if (_history.isEmpty) return const SizedBox.shrink();
+    if (_history.isEmpty) {
+      return const Center(child: Padding(
+        padding: EdgeInsets.all(24),
+        child: Text('Введите название дорамы, сериала или фильма',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: AppColors.textTertiary)),
+      ));
+    }
     return ListView(shrinkWrap: true, children: [
-      if (_history.length > 1)
+      if (_history.isNotEmpty)
         Align(
           alignment: Alignment.centerRight,
           child: TextButton(
@@ -236,16 +222,37 @@ class FilteredResultsScreen extends StatefulWidget {
 
 class _FilteredResultsScreenState extends State<FilteredResultsScreen> {
   Set<String> _watched = const <String>{};
+  bool _watchedReady = false;
+  int _watchedRequest = 0;
+  int _watchedRevision = 0;
 
   @override
   void initState() {
     super.initState();
+    Library.revision.addListener(_onLibraryChanged);
     _loadWatched();
   }
 
+  @override
+  void dispose() {
+    Library.revision.removeListener(_onLibraryChanged);
+    super.dispose();
+  }
+
+  void _onLibraryChanged() {
+    if (widget.filter.hideWatched) _loadWatched();
+  }
+
   Future<void> _loadWatched() async {
+    final request = ++_watchedRequest;
+    final revision = Library.revision.value;
     final ids = await Library.watchedTitleIds();
-    if (mounted) setState(() => _watched = ids);
+    if (!mounted || request != _watchedRequest) return;
+    setState(() {
+      _watched = ids;
+      _watchedReady = true;
+      _watchedRevision = revision;
+    });
   }
 
   @override
@@ -254,8 +261,10 @@ class _FilteredResultsScreenState extends State<FilteredResultsScreen> {
     final needsClientFilter = filter.minRating != null || filter.hideWatched;
     return PageScaffold(
       title: 'Подборка',
-      body: PagedScroll(
-        key: ValueKey<String>(filter.signature),
+      body: filter.hideWatched && !_watchedReady
+          ? const Center(child: CircularProgressIndicator())
+          : PagedScroll(
+        key: ValueKey<String>('${filter.signature}|${filter.hideWatched ? _watchedRevision : 0}'),
         loader: (cursor) => KodikApi.instance.fetch(filter, cursor: cursor),
         accept: needsClientFilter
             ? (title) => filter.accepts(title, watched: _watched)

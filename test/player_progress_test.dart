@@ -48,10 +48,11 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('retrying an unavailable episode does not mark it watched',
+  testWidgets('returning from an unavailable episode does not mark it watched',
       (tester) async {
     await _openUnavailablePlayer(tester);
-    await tester.tap(find.text('Повторить'));
+    expect(find.text('Повторить'), findsNothing);
+    await tester.tap(find.text('Вернуться к выбору серии'));
     await tester.pump();
     expect(await Library.history(), isEmpty);
     expect(tester.takeException(), isNull);

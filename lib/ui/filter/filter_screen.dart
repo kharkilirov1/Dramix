@@ -117,6 +117,7 @@ class _FilterScreenState extends State<FilterScreen> {
           DramaCountries.all,
           (_) => _gated('Фильтр по странам входит в Dramix Plus.', _pickCountries),
           locked: !_unlocked,
+          onTap: _pickCountries,
         ),
         _dropdown(
           'Жанры',
@@ -126,6 +127,7 @@ class _FilterScreenState extends State<FilterScreen> {
           DramaGenres.all,
           (_) => _gated('Фильтр по жанрам входит в Dramix Plus.', _pickGenres),
           locked: !_unlocked,
+          onTap: _pickGenres,
         ),
         _dropdown(
           'Статус',
@@ -252,6 +254,7 @@ class _FilterScreenState extends State<FilterScreen> {
     ValueChanged<String?> onChanged, {
     bool locked = false,
     VoidCallback? onLockedTap,
+    VoidCallback? onTap,
   }) {
     return Container(
       margin: const EdgeInsets.only(bottom: 18),
@@ -260,6 +263,10 @@ class _FilterScreenState extends State<FilterScreen> {
         onTap: () {
           if (locked) {
             (onLockedTap ?? () => _gated('$label входит в Dramix Plus.', () {}))();
+            return;
+          }
+          if (onTap != null) {
+            onTap();
             return;
           }
           showModalBottomSheet<void>(

@@ -71,13 +71,13 @@ class Curated {
     CuratedCollection(
       id: 'japan',
       title: 'Японские дорамы',
-      subtitle: 'От дорамы до аниме-сериала',
+      subtitle: 'Сериалы из Японии',
       countries: <String>{'Япония'},
     ),
     CuratedCollection(
       id: 'melodrama',
       title: 'Мелодрамы',
-      subtitle: 'Самый большой жанр Kodik',
+      subtitle: 'Сериалы о любви и отношениях',
       genres: <String>{'мелодрама'},
     ),
     CuratedCollection(
@@ -113,7 +113,7 @@ class Curated {
     CuratedCollection(
       id: 'ongoing',
       title: 'Сейчас выходят',
-      subtitle: 'Онгоинги, обновляются каждую неделю',
+      subtitle: 'Сериалы со статусом «Выходит» в Kodik',
       allStatus: 'ongoing',
     ),
     CuratedCollection(
@@ -125,7 +125,7 @@ class Curated {
     CuratedCollection(
       id: 'fresh',
       title: 'Новинки 2026',
-      subtitle: 'Добавлено в этом году',
+      subtitle: 'Произведения 2026 года',
       year: 2026,
     ),
   ];

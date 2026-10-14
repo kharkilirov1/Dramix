@@ -6,6 +6,7 @@ import '../core/net.dart';
 Future<bool> configureBackend(BuildContext context) async {
   final changed = await showDialog<bool>(
     context: context,
+    barrierDismissible: false,
     builder: (_) => const _BackendDialog(),
   );
   return changed == true;
@@ -31,6 +32,7 @@ class _BackendDialogState extends State<_BackendDialog> {
   }
 
   Future<void> _save() async {
+    if (_saving) return;
     setState(() {
       _saving = true;
       _error = null;
@@ -49,22 +51,34 @@ class _BackendDialogState extends State<_BackendDialog> {
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
+    return PopScope(
+      canPop: !_saving,
+      child: AlertDialog(
+      scrollable: true,
       title: const Text('Свой сервер каталога'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text('Укажите адрес своего сервера Dramix. '
-              'Оставьте поле пустым для обычного подключения. '
-              'Это меняет только каталог; история остаётся на устройстве.'),
+          const Text('Каталог будет загружаться через ваш сервер Dramix. '
+              'Вход и перенос библиотеки выполняются отдельно в разделе аккаунта. '
+              'Пустое поле возвращает обычное подключение к Kodik.'),
           const SizedBox(height: 12),
           TextField(
             controller: _controller,
             enabled: !_saving,
             keyboardType: TextInputType.url,
             autocorrect: false,
+            enableSuggestions: false,
+            textInputAction: TextInputAction.done,
+            onSubmitted: (_) => _save(),
             decoration: InputDecoration(
-                hintText: 'https://dramix.example', errorText: _error),
+                labelText: 'Адрес сервера',
+                hintText: 'https://dramix.example',
+                helperText: 'HTTPS-адрес без пути. Для разработки на этом '
+                    'устройстве можно указать localhost.',
+                helperMaxLines: 4,
+                errorMaxLines: 4,
+                errorText: _error),
           ),
         ],
       ),
@@ -74,8 +88,9 @@ class _BackendDialogState extends State<_BackendDialog> {
             child: const Text('Отмена')),
         TextButton(
             onPressed: _saving ? null : _save,
-            child: const Text('Сохранить')),
+            child: Text(_saving ? 'Сохраняем…' : 'Сохранить')),
       ],
+      ),
     );
   }
 }

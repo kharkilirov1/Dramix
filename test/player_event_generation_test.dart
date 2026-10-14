@@ -116,7 +116,7 @@ void main() {
     final old = await _open(tester);
     _event(old, PlaybackEventKind.play, 1);
     _event(old, PlaybackEventKind.time, 2, position: 30000);
-    await tester.tap(find.text('2'));
+    await tester.tap(find.text('Серия 2'));
     await tester.pumpAndSettle();
     final current = tester.widget<PlayerEmbed>(find.byType(PlayerEmbed));
     expect(current.sessionId, isNot(old.sessionId));
@@ -137,7 +137,7 @@ void main() {
     _event(embed, PlaybackEventKind.episodeChanged, 1, episode: 2);
     await tester.pump();
     expect(find.textContaining('Серия/озвучка изменилась в плеере'), findsOneWidget);
-    await tester.tap(find.text('2'));
+    await tester.tap(find.text('Серия 2'));
     await tester.pumpAndSettle();
     expect(find.textContaining('Серия/озвучка изменилась в плеере'), findsNothing);
     expect(await Library.history(), isEmpty);

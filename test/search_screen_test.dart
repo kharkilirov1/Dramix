@@ -74,4 +74,54 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('empty history explains how to begin searching', (tester) async {
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    expect(find.text('Введите название дорамы, сериала или фильма'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a single saved query can be cleared', (tester) async {
+    await Library.rememberSearch('Одна дорама');
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    expect(find.text('Очистить историю'), findsOneWidget);
+    await tester.tap(find.text('Очистить историю'));
+    await tester.pump();
+    expect(await Library.searchHistory(), isEmpty);
+    expect(find.text('Введите название дорамы, сериала или фильма'), findsOneWidget);
+  });
+
+  testWidgets('search hint follows the selected category', (tester) async {
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    await tester.tap(find.text('Фильмы'));
+    await tester.pump();
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.decoration!.hintText, 'Поиск: фильмы');
+  });
+
+
+  testWidgets('scope labels fit at 320px with enlarged text', (tester) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(),
+      home: MediaQuery(
+        data: const MediaQueryData(
+          size: Size(320, 700), textScaler: TextScaler.linear(2)),
+        child: const SearchScreen(),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byType(UnderlineTabs), findsOneWidget);
+    await tester.ensureVisible(find.text('Всё'));
+    await tester.tap(find.text('Всё'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
 }
