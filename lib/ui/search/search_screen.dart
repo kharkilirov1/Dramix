@@ -135,7 +135,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   style: const TextStyle(fontSize: 16),
                   decoration: InputDecoration(
                       hintText: 'Поиск: ${_scopeLabels[_scope].toLowerCase()}',
-                      hintStyle: TextStyle(color: AppColors.textTertiary),
+                      hintStyle: const TextStyle(color: AppColors.textTertiary),
                       border: InputBorder.none),
                   onSubmitted: (_) => _run(),
                 ),
