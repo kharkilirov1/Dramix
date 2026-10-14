@@ -74,4 +74,32 @@ void main() {
     await tester.pump();
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('empty history explains how to begin searching', (tester) async {
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    expect(find.text('Введите название дорамы, сериала или фильма'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a single saved query can be cleared', (tester) async {
+    await Library.rememberSearch('Одна дорама');
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    expect(find.text('Очистить историю'), findsOneWidget);
+    await tester.tap(find.text('Очистить историю'));
+    await tester.pump();
+    expect(await Library.searchHistory(), isEmpty);
+    expect(find.text('Введите название дорамы, сериала или фильма'), findsOneWidget);
+  });
+
+  testWidgets('search hint follows the selected category', (tester) async {
+    await tester.pumpWidget(_host());
+    await tester.pump();
+    await tester.tap(find.text('Фильмы'));
+    await tester.pump();
+    final field = tester.widget<TextField>(find.byType(TextField));
+    expect(field.decoration!.hintText, 'Поиск: фильмы');
+  });
+
 }
