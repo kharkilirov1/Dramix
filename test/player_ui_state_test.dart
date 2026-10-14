@@ -19,8 +19,10 @@ void main() {
   });
 
   testWidgets('duplicate episode numbers remain distinguishable by season', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const MaterialApp(home: MediaQuery(
-      data: MediaQueryData(size: Size(320, 640), textScaler: TextScaler.linear(1.5)),
+      data: MediaQueryData(textScaler: TextScaler.linear(1.5)),
       child: PlayerScreen(title: title, episodes: [
         KodikEpisodeRef(season: 1, episode: 1, url: ''),
         KodikEpisodeRef(season: 2, episode: 1, url: ''),
@@ -32,4 +34,27 @@ void main() {
     expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox.shrink());
   });
+  testWidgets('short landscape uses an accessible picker without overflow', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(640, 320));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const MaterialApp(home: MediaQuery(
+      data: MediaQueryData(textScaler: TextScaler.linear(2)),
+      child: PlayerScreen(title: title, episodes: [
+        KodikEpisodeRef(season: 1, episode: 1, url: ''),
+        KodikEpisodeRef(season: 2, episode: 1, url: ''),
+      ]))));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('Выбрать сезон и серию'), findsOneWidget);
+    expect(find.text('Сезон 1'), findsNothing);
+    expect(tester.takeException(), isNull);
+    await tester.tap(find.byTooltip('Выбрать сезон и серию'));
+    await tester.pumpAndSettle();
+    expect(find.text('Сезон 2 · Серия 1'), findsOneWidget);
+    await tester.tap(find.text('Сезон 2 · Серия 1'));
+    await tester.pumpAndSettle();
+    expect(find.text('Сезон 2 · Серия 1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
 }

@@ -505,9 +505,11 @@ class _PlayerScreenState extends State<PlayerScreen>
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Column(
+        child: LayoutBuilder(builder: (context, constraints) {
+          final compact = _fullscreen || constraints.maxHeight < 400;
+          return Column(
           children: [
-            _topBar(),
+            _topBar(compact: compact),
             if (_embedSelectionChanged)
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -547,14 +549,15 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ),
               ),
             ),
-            if (_mode == _Mode.web && !widget.provider.capabilities.resumeSeek)
+            if (!compact && _mode == _Mode.web && !widget.provider.capabilities.resumeSeek)
               const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                 child: Text('Точная позиция не восстанавливается автоматически в веб-плеере.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.white60, fontSize: 12))),
-            _episodeStrip(),
+            if (!compact) _episodeStrip(),
           ],
-        ),
+        );
+        }),
       ),
     );
   }
@@ -602,7 +605,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     }
   }
 
-  Widget _topBar() {
+  Widget _topBar({bool compact = false}) {
     final ep = _episode;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4),
@@ -640,6 +643,23 @@ class _PlayerScreenState extends State<PlayerScreen>
               ],
             ),
           ),
+          if (compact && widget.episodes.length > 1)
+            PopupMenuButton<int>(
+              tooltip: 'Выбрать сезон и серию',
+              icon: const Icon(Icons.playlist_play_rounded, color: Colors.white),
+              initialValue: _index,
+              onSelected: _goTo,
+              itemBuilder: (_) => [
+                for (var i = 0; i < widget.episodes.length; i++)
+                  PopupMenuItem(value: i,
+                    child: Text(widget.episodes[i].label)),
+              ],
+            ),
+          if (compact && _mode == _Mode.web && !widget.provider.capabilities.resumeSeek)
+            const Tooltip(
+              message: 'Точная позиция не восстанавливается автоматически в веб-плеере.',
+              child: Padding(padding: EdgeInsets.all(8),
+                child: Icon(Icons.info_outline, color: Colors.white60, size: 20))),
           if (Net.backendOrigin != null && ep != null)
             IconButton(
               tooltip: 'Комментарии к серии',
