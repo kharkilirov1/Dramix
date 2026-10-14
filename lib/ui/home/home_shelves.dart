@@ -184,9 +184,9 @@ class _ContinueWatchingShelfState extends State<ContinueWatchingShelf> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Semantics(
+      return Semantics(
         liveRegion: true,
-        child: Padding(
+        child: const Padding(
           padding: EdgeInsets.symmetric(horizontal: 16, vertical: 16),
           child: Text('Загружаем историю…',
               style: TextStyle(color: AppColors.textSecondary)),
