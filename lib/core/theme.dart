@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Theme tokens sampled from the Anixart Android app screenshots.
-///
-/// Kept byte-identical to the reference client so Dramix reads as the same
-/// product, only with a drama catalog behind it.
+/// Shared dark palette for Dramix, evolving the original Anixart reference.
 class AppColors {
   static const Color bg = Color(0xFF121212);          // page background
   static const Color surface = Color(0xFF252525);     // pills, search bar, nav

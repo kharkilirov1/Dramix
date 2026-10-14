@@ -37,8 +37,16 @@ class RemoteImage extends StatelessWidget {
   Widget build(BuildContext context) {
     final src = (url ?? '').trim();
 
-    Widget surface() =>
-        Container(width: width, height: height, color: AppColors.surface);
+    Widget surface() => Container(
+          width: width,
+          height: height,
+          color: AppColors.surface,
+          alignment: Alignment.center,
+          child: const ExcludeSemantics(
+            child: Icon(Icons.movie_outlined,
+                size: 28, color: AppColors.textTertiary),
+          ),
+        );
 
     Widget content = src.isEmpty
         ? surface()
@@ -89,12 +97,12 @@ class Poster extends StatelessWidget {
 
 /// The list item used across Главная / Закладки / Популярное / Поиск.
 ///
-/// Layout is byte-for-byte the reference client's: optional rank gutter, 86x122
-/// poster, title, meta line with rating, then description.
+/// Responsive poster row with optional rank, source-labelled rating and metadata.
 class ReleaseListItem extends StatelessWidget {
   final String title;
   final String? image;
   final double? grade;
+  final String? ratingSource;
   final String meta;
   final String? description;
   final int? rank;
@@ -105,6 +113,7 @@ class ReleaseListItem extends StatelessWidget {
     required this.title,
     this.image,
     this.grade,
+    this.ratingSource,
     this.meta = '',
     this.description,
     this.rank,
@@ -116,7 +125,9 @@ class ReleaseListItem extends StatelessWidget {
       : title = t.titleRu,
         image = t.image,
         grade = t.grade,
-        meta = t.episodesLabel,
+        ratingSource = t.material?.ratingSource,
+        meta = [if (t.year != null) '${t.year}', t.episodesLabel]
+            .where((part) => part.isNotEmpty).join(' · '),
         description = t.description;
 
   /// Builds an item from a locally stored snapshot.
@@ -124,82 +135,82 @@ class ReleaseListItem extends StatelessWidget {
       : title = t.title,
         image = t.poster,
         grade = null,
+        ratingSource = null,
         meta = t.subtitle,
         description = null,
         rank = null;
 
   @override
   Widget build(BuildContext context) {
-    final desc = description ?? '';
-    return InkWell(
-      onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: rank != null ? 30 : 0,
-              child: rank != null
-                  ? Text('$rank',
+    final desc = stripHtml(description ?? '').trim();
+    final score = grade;
+    return Semantics(
+      button: onTap != null,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (rank != null)
+                Padding(
+                  padding: const EdgeInsets.only(right: 10, top: 2),
+                  child: Text('$rank',
                       style: const TextStyle(
-                          fontSize: 18, color: AppColors.textSecondary))
-                  : null,
-            ),
-            Poster(url: image, width: 86, height: 122),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w600,
-                          height: 1.25)),
-                  const SizedBox(height: 4),
-                  Row(children: [
-                    Text(meta,
-                        style: const TextStyle(
-                            fontSize: 12.5, color: AppColors.textSecondary)),
-                    const SizedBox(width: 6),
-                    const Text('•',
-                        style: TextStyle(
-                            fontSize: 12.5, color: AppColors.textTertiary)),
-                    const SizedBox(width: 6),
-                    if (grade != null && grade! > 0) ...[
-                      Text(grade!.toStringAsFixed(1),
-                          style: const TextStyle(
-                              fontSize: 12.5, color: AppColors.textSecondary)),
-                      const SizedBox(width: 2),
-                      const Icon(Icons.star_rounded,
-                          size: 14, color: AppColors.textSecondary),
-                    ],
-                  ]),
-                  if (desc.isNotEmpty) ...[
-                    const SizedBox(height: 5),
-                    Text(stripHtml(desc),
-                        maxLines: 4,
+                          fontSize: 16, color: AppColors.textSecondary)),
+                ),
+              Poster(url: image, width: 78, height: 112, radius: 12),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                            fontSize: 12.5,
-                            color: AppColors.textTertiary,
-                            height: 1.35)),
+                            fontSize: 15.5,
+                            fontWeight: FontWeight.w600,
+                            height: 1.3)),
+                    if (meta.trim().isNotEmpty ||
+                        (score != null && score > 0)) ...[
+                      const SizedBox(height: 6),
+                      Wrap(
+                        spacing: 10,
+                        runSpacing: 4,
+                        children: [
+                          if (meta.trim().isNotEmpty)
+                            Text(meta,
+                                style: const TextStyle(
+                                    fontSize: 12.5,
+                                    color: AppColors.textSecondary)),
+                          if (score != null && score > 0)
+                            Text(
+                              '${score.toStringAsFixed(1)} ★'
+                              '${ratingSource == null ? '' : ' · $ratingSource'}',
+                              style: const TextStyle(
+                                  fontSize: 12.5,
+                                  color: AppColors.textSecondary),
+                            ),
+                        ],
+                      ),
+                    ],
+                    if (desc.isNotEmpty) ...[
+                      const SizedBox(height: 6),
+                      Text(desc,
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontSize: 12.5,
+                              color: AppColors.textSecondary,
+                              height: 1.4)),
+                    ],
                   ],
-                ],
+                ),
               ),
-            ),
-            SizedBox(
-              width: 32,
-              child: IconButton(
-                icon: const Icon(Icons.more_vert,
-                    size: 20, color: AppColors.textTertiary),
-                onPressed: () {},
-              ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -223,8 +234,9 @@ class UnderlineTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final height = 32 + MediaQuery.textScalerOf(context).scale(16);
     return SizedBox(
-      height: 44,
+      height: height,
       child: ListView.separated(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -232,29 +244,31 @@ class UnderlineTabs extends StatelessWidget {
         separatorBuilder: (_, __) => SizedBox(width: separator),
         itemBuilder: (context, i) {
           final active = i == selected;
-          return GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () => onChanged(i),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(tabs[i],
+          return Semantics(
+            selected: active,
+            button: true,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => onChanged(i),
+              child: Container(
+                alignment: Alignment.center,
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom: BorderSide(
+                      color: active
+                          ? AppColors.textPrimary : Colors.transparent,
+                      width: 2.5,
+                    ),
+                  ),
+                ),
+                child: Text(tabs[i],
                     style: TextStyle(
                         fontSize: 15,
                         fontWeight: active ? FontWeight.w700 : FontWeight.w400,
                         color: active
-                            ? AppColors.textPrimary
-                            : AppColors.textTertiary)),
-                const SizedBox(height: 6),
-                Container(
-                  height: 2.5,
-                  width: tabs[i].length * 9.0,
-                  decoration: BoxDecoration(
-                      color:
-                          active ? AppColors.textPrimary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(2)),
-                ),
-              ],
+                            ? AppColors.textPrimary : AppColors.textSecondary)),
+              ),
             ),
           );
         },
@@ -287,8 +301,8 @@ class BigPillButton extends StatelessWidget {
         borderRadius: BorderRadius.circular(32),
         onTap: onTap,
         child: Container(
-          height: 64,
-          padding: const EdgeInsets.symmetric(horizontal: 20),
+          constraints: const BoxConstraints(minHeight: 64),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
           child: Row(children: [
             Icon(icon, size: 24, color: AppColors.textPrimary),
             const SizedBox(width: 14),
@@ -296,6 +310,7 @@ class BigPillButton extends StatelessWidget {
               child: Text(label,
                   style: const TextStyle(
                       fontSize: 16, fontWeight: FontWeight.w500),
+                  maxLines: 2,
                   overflow: TextOverflow.ellipsis),
             ),
             if (trailing != null) trailing!,
@@ -323,32 +338,49 @@ class LightPillButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: AppColors.light,
-      borderRadius: BorderRadius.circular(32),
-      child: InkWell(
+    final enabled = onTap != null && !loading;
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      liveRegion: loading,
+      label: loading ? '$label, загрузка' : null,
+      child: Material(
+        color: enabled || loading ? AppColors.light : AppColors.surfaceHigh,
         borderRadius: BorderRadius.circular(32),
-        onTap: loading ? null : onTap,
-        child: Container(
-          height: 52,
-          alignment: Alignment.center,
-          child: loading
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                      strokeWidth: 2.4, color: Colors.black54))
-              : Row(mainAxisSize: MainAxisSize.min, children: [
-                  if (icon != null) ...[
-                    Icon(icon, size: 22, color: Colors.black),
-                    const SizedBox(width: 10),
-                  ],
-                  Text(label,
-                      style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black)),
-                ]),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(32),
+          onTap: enabled ? onTap : null,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 52),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            alignment: Alignment.center,
+            child: loading
+                ? const SizedBox(
+                    width: 22,
+                    height: 22,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.4, color: Colors.black54))
+                : Row(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      if (icon != null) ...[
+                        Icon(icon, size: 22,
+                            color: enabled ? Colors.black : AppColors.textSecondary),
+                        const SizedBox(width: 10),
+                      ],
+                      Flexible(
+                        child: Text(label,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: enabled
+                                    ? Colors.black : AppColors.textSecondary)),
+                      ),
+                    ],
+                  ),
+          ),
         ),
       ),
     );
@@ -364,18 +396,25 @@ class ErrorCentered extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            const Icon(Icons.cloud_off_outlined,
+                size: 32, color: AppColors.textSecondary),
+            const SizedBox(height: 12),
             Text(message,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                    color: AppColors.textSecondary, fontSize: 14)),
+                    color: AppColors.textSecondary, fontSize: 14, height: 1.4)),
             if (onRetry != null) ...[
               const SizedBox(height: 12),
-              TextButton(onPressed: onRetry, child: const Text('Повторить')),
+              TextButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: const Text('Повторить'),
+              ),
             ],
           ],
         ),
@@ -405,16 +444,19 @@ class PageScaffold extends StatelessWidget {
         bottom: false,
         child: Column(children: [
           SizedBox(
-            height: 60,
+            height: 34 + MediaQuery.textScalerOf(context).scale(21),
             child: Row(children: [
               const SizedBox(width: 8),
               IconButton(
+                  tooltip: 'Назад',
                   icon: const Icon(Icons.arrow_back,
                       color: AppColors.textPrimary),
                   onPressed: () => Navigator.of(context).maybePop()),
               const SizedBox(width: 12),
               Expanded(
                 child: Text(title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
                         fontSize: 21, fontWeight: FontWeight.w700)),
               ),

@@ -72,53 +72,54 @@ class _BottomNav extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(color: AppColors.surface),
+    return Material(
+      color: AppColors.surface,
       child: SafeArea(
         top: false,
         child: SizedBox(
-          height: 78,
+          height: 64 + MediaQuery.textScalerOf(context).scale(12),
           child: Row(
             children: [
               for (var i = 0; i < _items.length; i++)
                 Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => onChanged(i),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 56,
-                          height: 34,
-                          decoration: BoxDecoration(
-                            color: selected == i
-                                ? AppColors.accent
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(18),
+                  child: Semantics(
+                    selected: selected == i,
+                    button: true,
+                    child: InkWell(
+                      onTap: () => onChanged(i),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Container(
+                            width: 56,
+                            height: 34,
+                            decoration: BoxDecoration(
+                              color: selected == i
+                                  ? AppColors.accent : Colors.transparent,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Icon(
+                              selected == i ? _items[i].$2 : _items[i].$1,
+                              size: 24,
+                              color: selected == i
+                                  ? Colors.white : AppColors.textSecondary,
+                            ),
                           ),
-                          child: Icon(
-                            selected == i ? _items[i].$2 : _items[i].$1,
-                            size: 24,
-                            color: selected == i
-                                ? Colors.white
-                                : AppColors.textTertiary,
+                          const SizedBox(height: 4),
+                          Text(
+                            _items[i].$3,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: selected == i
+                                  ? FontWeight.w700 : FontWeight.w400,
+                              color: selected == i
+                                  ? AppColors.textPrimary : AppColors.textSecondary,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _items[i].$3,
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: selected == i
-                                ? FontWeight.w700
-                                : FontWeight.w400,
-                            color: selected == i
-                                ? AppColors.textPrimary
-                                : AppColors.textTertiary,
-                          ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -154,11 +155,14 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
       child: Row(
         children: [
           Expanded(
-            child: GestureDetector(
+            child: Semantics(
+              button: true,
+              child: InkWell(
+              borderRadius: BorderRadius.circular(24),
               onTap: onSearch,
               child: Container(
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
+                constraints: const BoxConstraints(minHeight: 48),
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                 decoration: BoxDecoration(
                   color: AppColors.surface,
                   borderRadius: BorderRadius.circular(24),
@@ -168,14 +172,18 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(searchHint,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 15, color: AppColors.textTertiary)),
                   ),
                 ]),
               ),
             ),
+            ),
           ),
           IconButton(
+            tooltip: 'Настройки',
             icon: const Icon(Icons.settings_outlined,
                 size: 26, color: AppColors.textSecondary),
             onPressed: () => Navigator.pushNamed(context, Routes.settings),
@@ -183,6 +191,7 @@ class TopBar extends StatelessWidget implements PreferredSizeWidget {
           Stack(
             children: [
               IconButton(
+                tooltip: 'Обновления каталога',
                 icon: const Icon(Icons.notifications_none_rounded,
                     size: 26, color: AppColors.textSecondary),
                 onPressed: () => Navigator.pushNamed(context, Routes.notifications),
