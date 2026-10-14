@@ -118,9 +118,11 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
 
   Future<void> _clearHistory() async {
     if (_clearing || _history.isEmpty) return;
+    FocusScope.of(context).unfocus();
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        scrollable: true,
         title: const Text('Очистить историю?'),
         content: const Text('Удалить сохранённые позиции всех серий на этом устройстве? '
             'Избранное и списки останутся. Облачные данные не изменятся.'),
@@ -144,28 +146,34 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     }
   }
 
+  Widget _constrain(Widget child) => Center(child: ConstrainedBox(
+    constraints: const BoxConstraints(maxWidth: 960),
+    child: child,
+  ));
+
   @override
   Widget build(BuildContext context) => SafeArea(
     bottom: false,
-    child: Column(children: [
-      TopBar(searchHint: 'Поиск дорам', onSearch: () => Navigator.pushNamed(context, Routes.search)),
-      UnderlineTabs(
-        tabs: _tabs, selected: _tab, separator: 22,
-        onChanged: (tab) {
-          if (_tab == tab) return;
-          _search.clear();
-          setState(() { _tab = tab; _query = ''; });
-          _load();
-        },
-      ),
-      Expanded(child: Center(child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 960),
-        child: Column(children: [
-          _controls(),
-          Expanded(child: KeyedSubtree(key: ValueKey<int>(_tab), child: _body())),
-        ]),
-      ))),
-    ]),
+    child: CustomScrollView(
+      key: const ValueKey<String>('library-scroll'),
+      slivers: [
+        SliverToBoxAdapter(child: TopBar(
+          searchHint: 'Поиск дорам',
+          onSearch: () => Navigator.pushNamed(context, Routes.search),
+        )),
+        SliverToBoxAdapter(child: UnderlineTabs(
+          tabs: _tabs, selected: _tab, separator: 22,
+          onChanged: (tab) {
+            if (_tab == tab) return;
+            _search.clear();
+            setState(() { _tab = tab; _query = ''; });
+            _load();
+          },
+        )),
+        SliverToBoxAdapter(child: _constrain(_controls())),
+        _bodySliver(),
+      ],
+    ),
   );
 
   Widget _controls() {
@@ -226,42 +234,60 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
     );
   }
 
-  Widget _body() {
+  Widget _bodySliver() {
     if (_loading) {
-      return const Center(child: CircularProgressIndicator(color: AppColors.textSecondary));
+      return const SliverToBoxAdapter(child: Padding(
+        padding: EdgeInsets.all(48),
+        child: Center(child: CircularProgressIndicator(color: AppColors.textSecondary)),
+      ));
     }
-    if (_error != null) return ErrorCentered(message: _error!, onRetry: _load);
+    if (_error != null) {
+      return SliverToBoxAdapter(child: _constrain(Padding(
+        padding: const EdgeInsets.all(24),
+        child: ErrorCentered(message: _error!, onRetry: _load),
+      )));
+    }
     if (_tab == 0) {
       final entries = _visibleCollections;
-      if (entries.isEmpty) return _empty(filtered: true);
-      return ListView.builder(
+      if (entries.isEmpty) {
+        return SliverToBoxAdapter(child: _constrain(_empty(filtered: true)));
+      }
+      return SliverPadding(
         padding: const EdgeInsets.only(bottom: 20),
-        itemCount: entries.length,
-        itemBuilder: (context, index) => CollectionCard(
-          collection: entries[index],
-          onTap: () => Navigator.push(context, MaterialPageRoute<void>(
-            builder: (_) => CollectionDetailScreen(collection: entries[index]))),
-        ),
+        sliver: SliverList(delegate: SliverChildBuilderDelegate(
+          (context, index) => _constrain(CollectionCard(
+            collection: entries[index],
+            onTap: () => Navigator.push(context, MaterialPageRoute<void>(
+              builder: (_) => CollectionDetailScreen(collection: entries[index]))),
+          )),
+          childCount: entries.length,
+        )),
       );
     }
     final history = _visibleHistory;
     final items = _visibleItems;
     if ((_tab == 1 ? history.length : items.length) == 0) {
-      return _empty(filtered: _query.trim().isNotEmpty);
+      return SliverToBoxAdapter(child: _constrain(
+        _empty(filtered: _query.trim().isNotEmpty),
+      ));
     }
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-      itemCount: _tab == 1 ? history.length : items.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 10),
-      itemBuilder: (context, index) {
-        final checkpoint = _tab == 1 ? history[index] : null;
-        final title = checkpoint?.title ?? items[index];
-        return LibraryRow(
-          key: ValueKey<String>('${title.id}:${checkpoint?.season}:${checkpoint?.episode}'),
-          title: title, checkpoint: checkpoint,
-          onOpen: () => openSavedTitle(context, title),
-        );
-      },
+    return SliverPadding(
+      padding: const EdgeInsets.only(bottom: 24),
+      sliver: SliverList(delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final checkpoint = _tab == 1 ? history[index] : null;
+          final title = checkpoint?.title ?? items[index];
+          return _constrain(Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 2),
+            child: LibraryRow(
+              key: ValueKey<String>('${title.id}:${checkpoint?.season}:${checkpoint?.episode}'),
+              title: title, checkpoint: checkpoint,
+              onOpen: () => openSavedTitle(context, title),
+            ),
+          ));
+        },
+        childCount: _tab == 1 ? history.length : items.length,
+      )),
     );
   }
 
@@ -276,9 +302,9 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
         : _tab == 1
           ? 'Сохранённые серии появятся здесь после подтверждённого просмотра.'
           : 'Добавьте дораму в избранное или список на её карточке.';
-    return ListView(
+    return Padding(
       padding: const EdgeInsets.fromLTRB(24, 32, 24, 24),
-      children: [
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
         const Icon(Icons.video_library_outlined, size: 42, color: AppColors.textTertiary),
         const SizedBox(height: 16),
         Text(title, textAlign: TextAlign.center,
@@ -295,7 +321,7 @@ class _BookmarksScreenState extends State<BookmarksScreen> {
           icon: Icon(filtered ? Icons.close : Icons.search),
           label: Text(filtered ? 'Сбросить поиск' : 'Найти дораму'),
         )),
-      ],
+      ]),
     );
   }
 }

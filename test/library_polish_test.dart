@@ -100,4 +100,32 @@ void main() {
     expect(find.text('Открыть карточку'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
+  testWidgets('library controls scroll at 320 width with large text and keyboard', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 480));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await Library.toggleFavorite(alpha);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(),
+      home: const MediaQuery(
+        data: MediaQueryData(
+          size: Size(320, 480),
+          viewInsets: EdgeInsets.only(bottom: 240),
+          textScaler: TextScaler.linear(2),
+        ),
+        child: Scaffold(body: BookmarksScreen()),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    final field = find.byKey(const ValueKey<String>('library-search'));
+    await tester.ensureVisible(field);
+    await tester.enterText(field, 'альфа');
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect((await Library.favorites()).single.id, alpha.id);
+    await tester.drag(find.byKey(const ValueKey<String>('library-scroll')), const Offset(0, -500));
+    await tester.pumpAndSettle();
+    expect(find.text(alpha.title), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
 }
