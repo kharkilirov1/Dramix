@@ -37,7 +37,10 @@ filter refresh, local history clearing, playback actions and optional account
 states. Flutter formatter, analyzer and tests have **not run** in this editing
 environment: no usable execution runtime is available. Earlier repository
 Actions attempts stopped before runner allocation, without executing a step.
-Keep the draft unmerged until those checks and real-device playback pass.
+Backend tests were subsequently executed: 23 unittest cases and 35 HTTP smoke
+assertions passed. See [the executed validation report](validation-2026-10-14.md)
+for the exact source and limits. Flutter checks remain unexecuted after a sandbox
+runtime failure. Keep the draft unmerged until Flutter checks and device playback pass.
 
 No screenshot or rendered app preview was produced here. Code review alone
 does not verify actual layout or current third-party iframe event behavior.
