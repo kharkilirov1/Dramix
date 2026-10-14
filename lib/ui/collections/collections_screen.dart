@@ -2,13 +2,34 @@ import 'package:flutter/material.dart';
 
 import '../../core/collections.dart';
 import '../../core/kodik_api.dart';
+import '../../core/models.dart';
+import '../../core/theme.dart';
 import '../release/title_screen.dart';
 import '../widgets.dart';
 
-/// Кэш обложек и счётчиков коллекций: записи не перезапрашиваются при rebuild.
-typedef _CollectionPreview = ({String? cover, int? count});
+/// Cached optional cover previews, independent of collection navigation.
+typedef _CollectionPreview = ({String? cover, bool failed});
 
-/// Коллекции: кураторские подборки Kodik.
+/// Collections are catalog filters, not community-created or personal lists.
+String collectionDescription(CuratedCollection collection) {
+  final criteria = <String>[
+    collection.types == KodikCatalog.movies ? 'Фильмы' : 'Сериалы',
+    ...collection.countries,
+    ...collection.genres,
+    if (collection.year != null) 'Год выпуска: ${collection.year}',
+    if (collection.allStatus == AiringStatus.ongoing.value) 'Сейчас выходят',
+    if (collection.allStatus == AiringStatus.released.value) 'Завершённые',
+  ];
+  return '${criteria.join(' · ')} · По рейтингу';
+}
+
+CuratedCollection _displayCollection(CuratedCollection collection) =>
+    CuratedCollection(
+      id: collection.id, title: collection.title,
+      subtitle: collectionDescription(collection), types: collection.types,
+      genres: collection.genres, countries: collection.countries,
+      year: collection.year, allStatus: collection.allStatus,
+    );
 class CollectionsScreen extends StatefulWidget {
   const CollectionsScreen({super.key});
 
@@ -31,10 +52,10 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       final results = page.results;
       return (
         cover: results.isEmpty ? null : results.first.poster,
-        count: page.total,
+        failed: false,
       );
     } catch (_) {
-      return (cover: null, count: null);
+      return (cover: null, failed: true);
     }
   }
 
@@ -44,23 +65,42 @@ class _CollectionsScreenState extends State<CollectionsScreen> {
       title: 'Коллекции',
       body: ListView.builder(
         padding: const EdgeInsets.only(top: 6, bottom: 16),
-        itemCount: Curated.all.length,
+        itemCount: Curated.all.length + 1,
         itemBuilder: (context, index) {
-          final c = Curated.all[index];
+          if (index == 0) {
+            return const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+              child: Text('Подборки по странам, жанрам и году выпуска. '
+                  'Состав зависит от доступных записей каталога Kodik.',
+                  style: TextStyle(color: AppColors.textSecondary)),
+            );
+          }
+          final c = Curated.all[index - 1];
           return FutureBuilder<_CollectionPreview>(
             future: _preview(c),
             builder: (context, snapshot) {
               final data = snapshot.data;
-              return CollectionCard(
-                collection: c,
+              return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              CollectionCard(
+                collection: _displayCollection(c),
                 image: data?.cover,
-                count: data?.count,
+                // Provider total counts dubbing records, not unique works.
+                // Keep discovery cards navigable without inventing a title count.
                 onTap: () => Navigator.push(
                   context,
                   MaterialPageRoute(
                       builder: (_) => CollectionDetailScreen(collection: c)),
                 ),
-              );
+              ),
+              if (data?.failed == true)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: TextButton(
+                    onPressed: () => setState(() => _previews.remove(c.id)),
+                    child: const Text('Не удалось загрузить обложку. Повторить'),
+                  ),
+                ),
+              ]);
             },
           );
         },
@@ -81,6 +121,11 @@ class CollectionDetailScreen extends StatelessWidget {
       title: collection.title,
       body: PagedScroll(
         key: ValueKey<String>(collection.signature),
+        header: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text(collectionDescription(collection),
+              style: const TextStyle(color: AppColors.textSecondary)),
+        ),
         loader: (cursor) =>
             KodikApi.instance.fetch(collection.filter, cursor: cursor),
         itemBuilder: (context, title, _) => ReleaseListItem.kodik(
