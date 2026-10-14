@@ -84,8 +84,8 @@ class _AccountScreenState extends State<AccountScreen> {
       if (mounted) setState(() {
         _failed = true;
         _message = error is BackendConflict
-            ? '${error.message} Незавершённая операция сохранена. '
-              'Повтор не перезапишет облачную запись.'
+            ? '${error.message} Облачная запись не перезаписана. '
+              'Если импорт был начат, его незавершённые операции сохранены.'
             : error is BackendError
                 ? error.message
                 : 'Действие не завершено. Проверьте соединение и повторите.';
@@ -100,6 +100,7 @@ class _AccountScreenState extends State<AccountScreen> {
     if (!_form.currentState!.validate()) return;
     await _run(() async {
       await session.signIn(_name.text, _password.text, register: _register);
+      if (!mounted) return;
       _password.clear();
       _message = 'Вход выполнен. Локальные данные не отправлены на сервер.';
     });
@@ -281,9 +282,9 @@ class _AccountScreenState extends State<AccountScreen> {
                   ),
                 ]),
               ),
-              if (_busy) const Semantics(
+              if (_busy) Semantics(
                 label: 'Выполняется действие',
-                child: LinearProgressIndicator(),
+                child: const LinearProgressIndicator(),
               ),
               if (_message.isNotEmpty) Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
