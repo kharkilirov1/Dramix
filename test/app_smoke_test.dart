@@ -65,6 +65,20 @@ void main() {
     expect(find.text('Обзор'), findsOneWidget);
     expect(find.text('Закладки'), findsOneWidget);
     expect(find.text('Профиль'), findsOneWidget);
+    expect(find.text('Весь каталог'), findsOneWidget);
+    expect(find.text('Моя вкладка'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('home retains access to the full catalog and saved filter',
+      (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(), home: const RootShell(),
+    ));
+    await tester.pump(const Duration(milliseconds: 60));
+    await tester.tap(find.text('Весь каталог'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.byType(CatalogScreen), findsOneWidget);
     expect(find.text('Моя вкладка'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });

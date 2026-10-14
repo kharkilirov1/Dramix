@@ -110,6 +110,6 @@ void main() {
 
     expect(find.text(_history.title), findsNWidgets(2));
     expect(find.text('Сезон 1 · Серия 1\nПозиция 2:05'), findsOneWidget);
-    expect(find.text('Сезон 2 · Серия 1\nПозиция неизвестна'), findsOneWidget);
+    expect(find.text('Сезон 2 · Серия 1\nНачало серии или позиция не сохранена'), findsOneWidget);
   });
 }

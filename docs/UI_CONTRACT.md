@@ -252,8 +252,9 @@ Kodik is a video catalog, not a community. Wire visible features to real data:
 - **Закладки** — the eight underline tabs in the reference order. «Коллекции»
   renders `Curated.all` with `CollectionCard`; every other tab is local data
   through `Library`, and the screen listens to `Library.revision`.
-- **Профиль** — reference layout, local numbers from `Library.stats()`; the
-  donut chart uses `fl_chart`'s `PieChart` over the watch-list distribution.
+- **Профиль** — local library and saved checkpoints, with the watch-list
+  distribution. A checkpoint is not proof of a fully watched episode; do not
+  present checkpoint count as completed episodes or invented watched duration.
 - **Расписание** — Kodik has no airing calendar. Group the recently updated
   feed by weekday of `KodikTitle.updatedAt`, keep the reference's Пн–Вс tabs,
   and say honestly in the subtitle what the screen shows.
@@ -278,7 +279,8 @@ Kodik is a video catalog, not a community. Wire visible features to real data:
 6. Kodik has **no** user accounts, comments, friends or airing calendar —
    do not fake them. Local data comes from `Library`. Where a reference screen
    has no Kodik equivalent, adapt or remove the placeholder and honestly state the situation.
-7. Verify with `flutter analyze` before finishing.
+7. Run formatter, analyzer and tests before merge. If execution is unavailable,
+   keep the PR draft and explicitly record that validation did not run.
 
 ## Playback and local library
 
@@ -287,8 +289,10 @@ card. It does not promise automatic seeking inside a third-party iframe.
 Native video can restore a known checkpoint; iframe progress requires reliable
 player events and must never be inferred from page loading.
 
-No account is required. Comments and cloud sync are future server features,
-not placeholders described as working features. Canonical identity is
+No account is required. The optional own server exposes prototype accounts, episode comments and an
+explicit upload of local library snapshots. It is not deployed automatically;
+this is not automatic bidirectional sync. Show guest/local state and optional
+server state separately, and never require an account to browse or watch. Canonical identity is
 conservative: only known external IDs link translations; never title/year guesses.
 
 ## Verification for the home adaptation

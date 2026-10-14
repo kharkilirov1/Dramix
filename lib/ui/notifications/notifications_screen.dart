@@ -21,13 +21,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   @override
   Widget build(BuildContext context) {
     return PageScaffold(
-      title: 'Уведомления',
+      title: 'Обновления',
       body: Column(children: [
         const Padding(
           padding: EdgeInsets.fromLTRB(16, 10, 16, 6),
           child: Align(
             alignment: Alignment.centerLeft,
-            child: Text('Новые серии и обновления дорам',
+            child: Text('Недавно обновлённые записи каталога Kodik. '
+                'Это не личные уведомления и не подтверждение выхода новых серий.',
                 style:
                     TextStyle(fontSize: 13.5, color: AppColors.textTertiary)),
           ),
@@ -43,7 +44,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               title,
               onTap: () => openTitle(context, title),
             ),
-            emptyText: 'Пока ничего нового',
+            emptyText: 'Обновлений в каталоге пока нет',
           ),
         ),
       ]),
