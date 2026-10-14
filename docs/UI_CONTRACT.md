@@ -1,9 +1,46 @@
 # UI contract — Dramix
 
-Dramix reproduces the **Anixart** client UI one-to-one, but is backed by the
-**Kodik** drama catalog. Read this before writing any screen.
+Dramix uses the **Kodik** drama/series catalog. The owner has authorized a
+**gradual Netflix-inspired discovery UI**, retaining the four navigation tabs,
+local library and guest access. Anixart styling is a starting point rather than
+a requirement to reproduce its screens one-to-one. Read this before writing any screen.
 
-## Design language (do not invent new styles)
+
+## Дополнительный референс: FrameXTV
+
+Источник, предоставленный владельцем: https://framextv.xyz/
+Изучены структура главной, каталог TV, страница Reacher и публичная документация
+API плеера. Использовано текстовое извлечение страниц; визуальный рендер,
+мобильная адаптация и фактическое воспроизведение не проверены.
+
+Подходящие направления для Dramix:
+- выделенный тайтл с описанием и действиями просмотра/подробностей;
+- подборки по популярности, обновлениям и жанру с переходом «Все»;
+- переключение каталога между полками и сеткой;
+- явно выбранный сезон, количество серий и карточки отдельных эпизодов;
+- близкие по жанру/стране произведения при наличии данных;
+- быстрый доступ к личному списку и истории.
+
+Приоритеты сохраняются: локальное продолжение, выбор сезонов и озвучки,
+библиотека и гостевой доступ. Выделенная панель, если добавляется, статичная;
+не обещать даты выхода, кадры/описания каждой серии или рекомендации,
+которые не предоставлены источником данных. Глобальную популярность и
+персональные рекомендации обозначать различимо.
+
+Публичная документация FrameXTV описывает старт с timestamp и события
+`frameXTV:timeupdate` через `postMessage`, а также fallback провайдеров.
+Это полезный образец контракта собственного playback bridge, а не
+подтверждение аналогичной поддержки Kodik. Перед применением проверить
+реальные события, source/origin сообщений и привязку к текущей серии;
+сохранять ограничения прогресса iframe до подтверждённой интеграции.
+
+Проверенные страницы:
+- https://framextv.xyz/
+- https://framextv.xyz/tv
+- https://framextv.xyz/tv/108978
+- https://framextv.xyz/api
+
+## Design language (evolve existing components gradually)
 
 All tokens live in `lib/core/theme.dart` → `AppColors`:
 
@@ -26,9 +63,9 @@ screen titles `21 w700`; section headings `19–20 w700`; list titles
 `15.5 w600`; meta `12.5–13`; tabs `15` (`w700` active / `w400` inactive);
 nav labels `12`.
 
-Screens are **not** wrapped in a floating app bar: a plain
-`SafeArea(bottom: false)` + `Column` with `TopBar` on top, exactly like the
-reference. Sub-pages use `PageScaffold`.
+Use existing colors and shared components. Home/discover use one vertical page
+scroll and horizontal poster shelves; keep responsive sizing and text scaling.
+Sub-pages use `PageScaffold`. No autoplay hero or replacement of library navigation.
 
 ## Shared widgets — `lib/ui/widgets.dart`
 
@@ -143,6 +180,7 @@ bestRating, ratingSource, countryLabel, screenshots`.
 ```dart
 Library.revision                       // ValueNotifier<int>, bump => screens refresh
 Library.history() / record(WatchEntry) / clearHistory() / resumePoint(id)
+Library.continueWatching({int limit = 12}) // newest positive checkpoint per work
 Library.favorites() / isFavorite(id) / toggleFavorite(SavedTitleRef) / clearFavorites()
 Library.watchStatus(id) / setWatchStatus(SavedTitleRef, WatchStatus?)
 Library.list(WatchStatus) / clearLists()
@@ -201,24 +239,22 @@ class PlayerScreen({required KodikTitle title,
 
 ## Screen-by-screen mapping (agreed behaviour)
 
-Kodik is a video catalog, not a community. Keep the reference layout, but wire
-it to what the data actually supports:
+Kodik is a video catalog, not a community. Wire visible features to real data:
 
-- **Главная** — `TopBar('Поиск дорам')` + `UnderlineTabs(['Моя вкладка',
-  'Последнее', 'Онгоинги', 'Анонсы', 'Завершенные'])`, default index `1`.
-  Tab 0 reads `Library.myTabFilter()`; when it is `null`, show the reference's
-  empty state with a `LightPillButton('Открыть Фильтр')` that pushes
-  `FilterScreen` and stores the result via `Library.setMyTabFilter`.
-  Tabs 1–4: `sort: updated`, `allStatus: 'ongoing'`, `'anons'`, `'released'`.
-- **Обзор** — image banners from the top-rated list, the five `BigPillButton`
-  tiles (Популярное / Расписание / Коллекции / Фильтр / Рандом), the
-  «Рекомендации» card, and instead of «Обсуждаемое сегодня» a «Сейчас выходят»
-  feed (`allStatus: 'ongoing'`).
+- **Главная** — search for dramas/series, local «Продолжить просмотр»,
+  finite shelves «Недавно обновлённые», «Сериалы с высоким рейтингом»,
+  «Корейские дорамы», «Мелодрамы». Network sections load and retry independently.
+  «Все» opens the existing paginated results; «Весь каталог» opens CatalogScreen
+  with the old catalog tabs and saved custom filter. Lists/favorites are preserved.
+- **Обзор** — serial-focused banners, existing navigation tiles and finite
+  «Сейчас выходят» shelf. No claims of personalization without an actual algorithm.
+  Collections are genre/country queries, not user-curated social lists.
 - **Закладки** — the eight underline tabs in the reference order. «Коллекции»
   renders `Curated.all` with `CollectionCard`; every other tab is local data
   through `Library`, and the screen listens to `Library.revision`.
-- **Профиль** — reference layout, local numbers from `Library.stats()`; the
-  donut chart uses `fl_chart`'s `PieChart` over the watch-list distribution.
+- **Профиль** — local library and saved checkpoints, with the watch-list
+  distribution. A checkpoint is not proof of a fully watched episode; do not
+  present checkpoint count as completed episodes or invented watched duration.
 - **Расписание** — Kodik has no airing calendar. Group the recently updated
   feed by weekday of `KodikTitle.updatedAt`, keep the reference's Пн–Вс tabs,
   and say honestly in the subtitle what the screen shows.
@@ -236,11 +272,34 @@ it to what the data actually supports:
    `print` outside `// ignore: avoid_print`.
 3. All user-facing text is **Russian**, matching the reference wording
    (`Здесь пока пусто`, `Повторить`, `Войдите…` etc. as appropriate).
-4. Keep list feeds wrapped in `PagedScroll` with a `ValueKey(signature)`.
+4. Keep full list feeds wrapped in `PagedScroll` with a `ValueKey(signature)`.
+   Finite poster shelves use independent loaders and a route to full results.
 5. Handle the three states every time: loading, error (`ErrorCentered` with
    `onRetry`), empty.
 6. Kodik has **no** user accounts, comments, friends or airing calendar —
    do not fake them. Local data comes from `Library`. Where a reference screen
-   has no Kodik equivalent, keep the reference layout and honestly state the
-   situation (e.g. an empty state with an explanatory line).
-7. Verify with `flutter analyze` before finishing.
+   has no Kodik equivalent, adapt or remove the placeholder and honestly state the situation.
+7. Run formatter, analyzer and tests before merge. If execution is unavailable,
+   explicitly record that validation did not run. Keep the PR draft unless the
+   repository owner explicitly authorizes merging with those limits.
+
+## Playback and local library
+
+Shelf progress only identifies the saved season/episode and opens its title
+card. It does not promise automatic seeking inside a third-party iframe.
+Native video can restore a known checkpoint; iframe progress requires reliable
+player events and must never be inferred from page loading.
+
+No account is required. The optional own server exposes prototype accounts, episode comments and an
+explicit upload of local library snapshots. It is not deployed automatically;
+this is not automatic bidirectional sync. Show guest/local state and optional
+server state separately, and never require an account to browse or watch. Canonical identity is
+conservative: only known external IDs link translations; never title/year guesses.
+
+## Verification for the home adaptation
+
+Before merge run formatter, analyzer and Flutter tests, including
+`test/home_shelves_test.dart`. Test narrow mobile and wide desktop/web layouts,
+text scaling, independent section failures, clearing history, shelf deduplication
+across registered translations, and complete catalog pagination.
+These checks have not been executed in the editing session.

@@ -50,12 +50,15 @@ class _TitleLoaderScreenState extends State<TitleLoaderScreen> {
   Future<void> _load() async {
     setState(() => _error = null);
     try {
+      await Library.registerTitle(widget.ref);
       final full = await KodikApi.instance.byId(widget.ref.id);
       if (!mounted) return;
       if (full == null) {
         setState(() => _error = 'Тайтл больше недоступен на Kodik');
         return;
       }
+      await Library.registerTitle(full.ref);
+      if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute<void>(builder: (_) => TitleScreen(title: full)),
       );
@@ -93,12 +96,20 @@ class _TitleScreenState extends State<TitleScreen> {
   late KodikTitle _title;
   List<KodikTitle> _versions = const <KodikTitle>[];
   int _versionIndex = 0;
+  int? _season;
+  Set<String> _startedEpisodes = <String>{};
   bool _favorite = false;
   int? _status;
   int? _rating;
   WatchEntry? _resume;
   bool _expanded = false;
   bool _loading = true;
+  bool _localLoading = true;
+  bool _versionsLoading = false;
+  String? _loadError;
+  String? _localError;
+  String? _versionsError;
+  int _localRequest = 0;
 
   @override
   void initState() {
@@ -112,46 +123,78 @@ class _TitleScreenState extends State<TitleScreen> {
       _versions.isEmpty ? _title : _versions[_versionIndex];
 
   Future<void> _load() async {
+    setState(() { _loading = true; _loadError = null; });
     try {
       final full = await KodikApi.instance.byId(widget.title.id);
       if (!mounted) return;
       if (full != null) {
+        await Library.registerTitle(full.ref);
+        if (!mounted) return;
         setState(() => _title = full);
+        await _loadLocal();
+        if (!mounted) return;
         unawaited(_loadVersions(full));
+      } else {
+        setState(() => _loadError = 'Не удалось найти обновлённые данные.');
       }
     } catch (_) {
-      // The preview record is already good enough to render the page.
+      if (mounted) setState(() => _loadError =
+          'Не удалось обновить данные. Показана сохранённая карточка.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _loadVersions(KodikTitle source) async {
+    setState(() { _versionsLoading = true; _versionsError = null; });
     try {
+      await Library.registerTitle(source.ref);
       final list = await KodikApi.instance.versions(source);
+      for (final version in list) {
+        await Library.registerTitle(version.ref);
+      }
       if (!mounted || list.isEmpty) return;
-      final found = list.indexWhere((e) => e.id == source.id);
+      final found = list.indexWhere((e) => e.id == _active.id);
       setState(() {
         _versions = list;
         _versionIndex = found < 0 ? 0 : found;
       });
+      await _loadLocal();
     } catch (_) {
-      // Voice-over switching is a bonus; a failure must not break the page.
+      if (mounted) setState(() => _versionsError =
+          'Не удалось загрузить другие озвучки и субтитры.');
+    } finally {
+      if (mounted) setState(() => _versionsLoading = false);
     }
   }
 
   Future<void> _loadLocal() async {
-    final favorite = await Library.isFavorite(widget.title.id);
-    final status = await Library.watchStatus(widget.title.id);
-    final rating = await Library.rating(widget.title.id);
-    final resume = await Library.resumePoint(widget.title.id);
-    if (!mounted) return;
-    setState(() {
-      _favorite = favorite;
-      _status = status;
-      _rating = rating;
-      _resume = resume;
-    });
+    final request = ++_localRequest;
+    final title = _active;
+    final id = title.id;
+    if (mounted) setState(() { _localLoading = true; _localError = null; });
+    try {
+      await Library.registerTitle(title.ref);
+      final favorite = await Library.isFavorite(id);
+      final status = await Library.watchStatus(id);
+      final rating = await Library.rating(id);
+      final resume = await Library.resumePoint(id);
+      final history = await Library.history();
+      final started = await startedEpisodesForWork(title.ref, history);
+      if (!mounted || request != _localRequest || _active.id != id) return;
+      setState(() {
+        _startedEpisodes = started;
+        _season ??= resume?.season;
+        _favorite = favorite; _status = status; _rating = rating; _resume = resume;
+      });
+    } catch (_) {
+      if (mounted && request == _localRequest) setState(() {
+        _localError = 'Не удалось прочитать локальную историю.';
+        _resume = null;
+      });
+    } finally {
+      if (mounted && request == _localRequest) setState(() => _localLoading = false);
+    }
   }
 
   Future<void> _toggleFavorite() async {
@@ -217,23 +260,12 @@ class _TitleScreenState extends State<TitleScreen> {
     showMessage(context, next == null ? 'Оценка снята' : 'Оценка $next сохранена');
   }
 
-  int _resumeIndex(List<KodikEpisodeRef> refs) {
-    final r = _resume;
-    if (r == null) return 0;
-    final i =
-        refs.indexWhere((e) => e.season == r.season && e.episode == r.episode);
-    return i < 0 ? 0 : i;
-  }
+  int _resumeIndex(List<KodikEpisodeRef> refs) =>
+      playbackStartIndex(refs, _resume, selectedSeason: _season);
 
   Future<void> _play({int? index}) async {
+    if (_localLoading) return;
     final active = _active;
-    if (index == null && _versions.length > 1) {
-      await Navigator.of(context).push(
-        MaterialPageRoute<void>(builder: (_) => VoiceoverScreen(title: _title)),
-      );
-      if (mounted) await _loadLocal();
-      return;
-    }
     final refs = active.episodeRefs;
     if (refs.isEmpty) {
       showMessage(context, 'Для этого тайтла нет доступных серий');
@@ -271,7 +303,9 @@ class _TitleScreenState extends State<TitleScreen> {
         ),
         child: SafeArea(
           bottom: false,
-          child: SingleChildScrollView(
+          child: Center(child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1040),
+            child: SingleChildScrollView(
             physics: const ClampingScrollPhysics(),
             padding: const EdgeInsets.only(bottom: 32),
             child: Column(
@@ -293,27 +327,7 @@ class _TitleScreenState extends State<TitleScreen> {
                     ],
                   ),
                 ),
-                Center(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(vertical: 6),
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(18),
-                      boxShadow: [
-                        BoxShadow(
-                            color: Colors.black.withOpacity(0.6),
-                            blurRadius: 30)
-                      ],
-                    ),
-                    child: Poster(
-                        url: r.image, width: 220, height: 324, radius: 18),
-                  ),
-                ),
-                const SizedBox(height: 18),
-                _titleBlock(r),
-                const SizedBox(height: 16),
-                _pillsRow(r, refs.length),
-                const SizedBox(height: 14),
-                _playRow(refs),
+                _hero(r, refs),
                 if (_loading)
                   const Padding(
                     padding: EdgeInsets.only(top: 12),
@@ -326,6 +340,14 @@ class _TitleScreenState extends State<TitleScreen> {
                       ),
                     ),
                   ),
+                if (_loadError != null) _notice(_loadError!, _load),
+                if (_localError != null) _notice(_localError!, _loadLocal),
+                if (_versionsError != null)
+                  _notice(_versionsError!, () => _loadVersions(_title)),
+                if (_versionsLoading)
+                  const Padding(padding: EdgeInsets.all(16),
+                    child: Text('Загружаем варианты просмотра…',
+                      style: TextStyle(color: AppColors.textSecondary))),
                 const SizedBox(height: 14),
                 _infoRows(r),
                 if (r.genreList.isNotEmpty) _genres(r),
@@ -335,7 +357,7 @@ class _TitleScreenState extends State<TitleScreen> {
                 if (r.material != null) _ratingBlock(r),
                 const SizedBox(height: 24),
               ],
-            ),
+            ))),
           ),
         ),
       ),
@@ -344,102 +366,74 @@ class _TitleScreenState extends State<TitleScreen> {
 
   // --------------------------------------------------------------- sections
 
-  Widget _titleBlock(KodikTitle r) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Icon(Icons.info_outline, size: 18, color: AppColors.textTertiary),
-        const SizedBox(width: 10),
-        Expanded(
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(r.titleRu,
-                style:
-                    const TextStyle(fontSize: 21, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 3),
-            Row(children: [
-              Flexible(
-                child: Text(r.titleOrig ?? '',
-                    style: const TextStyle(
-                        fontSize: 13.5, color: AppColors.textTertiary),
-                    overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              _tag(r.typeLabel),
-              if ((r.material?.minimalAge ?? 0) > 0) ...[
-                const SizedBox(width: 6),
-                _tag('${r.material!.minimalAge}+'),
-              ],
-            ]),
-          ]),
-        ),
+  Widget _notice(String message, Future<void> Function() retry) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+    child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 12,
+      children: [Text(message, style: const TextStyle(color: AppColors.textSecondary)),
+        TextButton(onPressed: retry, child: const Text('Повторить'))]));
+
+  Widget _hero(KodikTitle title, List<KodikEpisodeRef> refs) =>
+      LayoutBuilder(builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 720;
+        final poster = Padding(padding: const EdgeInsets.all(16),
+          child: Poster(url: title.image, width: wide ? 230 : 180,
+            height: wide ? 340 : 265, radius: 18));
+        final details = Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [_titleBlock(title), const SizedBox(height: 12),
+            _playRow(refs), const SizedBox(height: 12),
+            _pillsRow(title, refs.length),
+            if (_resume != null && _resume!.positionMs > 0 &&
+                refs.any((e) => e.season == _resume!.season &&
+                    e.episode == _resume!.episode))
+              const Padding(padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+                child: Text('Сохранённая серия. Точная позиция зависит от плеера.',
+                  style: TextStyle(fontSize: 12, color: AppColors.textTertiary))),
+          ]);
+        return wide ? Row(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [poster, Expanded(child: Padding(
+            padding: const EdgeInsets.only(top: 24), child: details))])
+          : Column(children: [Center(child: poster), details]);
+      });
+
+  Widget _titleBlock(KodikTitle r) => Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16),
+    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(r.titleRu, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+      if ((r.titleOrig ?? '').isNotEmpty && r.titleOrig != r.titleRu)
+        Padding(padding: const EdgeInsets.only(top: 6),
+          child: Text(r.titleOrig!,
+            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary))),
+      const SizedBox(height: 10),
+      Wrap(spacing: 8, runSpacing: 6, children: [
+        _tag(r.typeLabel),
+        if (r.year != null) _tag('${r.year}'),
+        if ((r.material?.minimalAge ?? 0) > 0) _tag('${r.material!.minimalAge}+'),
+        if ((r.quality ?? '').isNotEmpty) _tag(r.quality!),
       ]),
-    );
-  }
+    ]));
 
   Widget _pillsRow(KodikTitle r, int episodes) {
     final listStatus = WatchStatus.fromValue(_status);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(children: [
-        Expanded(
-          flex: 3,
-          child: OutlinedButton(
-            onPressed: _pickStatus,
-            style: _pillStyle,
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Flexible(
-                child: Text(listStatus?.title ?? 'Не смотрю',
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontSize: 14.5)),
-              ),
-              const SizedBox(width: 6),
-              const Icon(Icons.keyboard_arrow_down, size: 18),
-            ]),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 3,
-          child: OutlinedButton(
-            onPressed: _toggleFavorite,
-            style: _pillStyle,
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              Text('${r.totalEpisodes ?? episodes}',
-                  style: const TextStyle(fontSize: 14.5)),
-              const SizedBox(width: 8),
-              Icon(
-                _favorite
-                    ? Icons.bookmark_rounded
-                    : Icons.bookmark_border_rounded,
-                size: 17,
-                color: _favorite ? AppColors.statPlans : null,
-              ),
-            ]),
-          ),
-        ),
-        const SizedBox(width: 10),
-        Expanded(
-          flex: 2,
-          child: OutlinedButton(
-            onPressed: null,
-            style: _pillStyle,
-            child: Text('${r.totalEpisodes ?? 0} эп.',
-                style: const TextStyle(fontSize: 13.5)),
-          ),
-        ),
-      ]),
-    );
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Wrap(spacing: 8, runSpacing: 8, children: [
+        OutlinedButton.icon(onPressed: _pickStatus, style: _pillStyle,
+          icon: const Icon(Icons.list_alt_rounded, size: 18),
+          label: Text(listStatus?.title ?? 'Добавить в список')),
+        OutlinedButton.icon(onPressed: _toggleFavorite, style: _pillStyle,
+          icon: Icon(_favorite ? Icons.bookmark_rounded :
+            Icons.bookmark_border_rounded, size: 18),
+          label: Text(_favorite ? 'В избранном' : 'В избранное')),
+        if (r.isSerial && episodes > 0)
+          Padding(padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Text('$episodes доступных серий',
+              style: const TextStyle(color: AppColors.textSecondary))),
+      ]));
   }
 
   Widget _playRow(List<KodikEpisodeRef> refs) {
     final available = refs.isNotEmpty;
-    final resume = _resume;
-    final label = !available
-        ? 'Нет доступных серий'
-        : (resume == null || resume.title.id != _active.id
-            ? 'Воспроизвести'
-            : 'Продолжить · ${refs[_resumeIndex(refs)].label}');
+    final label = _localLoading ? 'Проверяем историю…'
+        : playbackActionLabel(refs, _resume, selectedSeason: _season);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -449,7 +443,8 @@ class _TitleScreenState extends State<TitleScreen> {
               ? LightPillButton(
                   icon: Icons.play_arrow_rounded,
                   label: label,
-                  onTap: _play,
+                  loading: _localLoading,
+                  onTap: _localLoading ? null : _play,
                 )
               : Container(
                   height: 52,
@@ -554,58 +549,37 @@ class _TitleScreenState extends State<TitleScreen> {
   }
 
   Widget _voices() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 22, 16, 8),
-          child: Text('Озвучка',
-              style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
-        ),
-        SizedBox(
-          height: 38,
-          child: ListView.separated(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            itemCount: _versions.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 8),
-            itemBuilder: (context, i) {
-              final v = _versions[i];
-              final t = v.translation;
-              final name = t == null
-                  ? 'Вариант ${i + 1}'
-                  : (t.isVoice || _mentionsSubtitles(t.title)
-                      ? t.title
-                      : '${t.title} · субтитры');
-              final active = i == _versionIndex;
-              return GestureDetector(
-                onTap: () => setState(() => _versionIndex = i),
-                child: Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                  decoration: BoxDecoration(
-                    color: active ? AppColors.accent : AppColors.surface,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Center(
-                    child: Text(name,
-                        style: TextStyle(
-                            fontSize: 13.5,
-                            color: active
-                                ? Colors.white
-                                : AppColors.textSecondary)),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-      ],
-    );
+    return Padding(padding: const EdgeInsets.fromLTRB(16, 22, 16, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        const Text('Озвучка и субтитры',
+          style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
+        const SizedBox(height: 10),
+        Wrap(spacing: 8, runSpacing: 8, children: [
+          for (var i = 0; i < _versions.length; i++)
+            ChoiceChip(
+              label: Text(_versions[i].translation == null ? 'Вариант ${i + 1}'
+                : (_versions[i].translation!.isVoice ||
+                    _mentionsSubtitles(_versions[i].translation!.title)
+                  ? _versions[i].translation!.title
+                  : '${_versions[i].translation!.title} · субтитры')),
+              selected: i == _versionIndex,
+              onSelected: (_) async {
+                setState(() {
+                  _versionIndex = i; _resume = null;
+                  _localLoading = true; _startedEpisodes = <String>{};
+                });
+                await _loadLocal();
+              }),
+        ]),
+      ]));
   }
 
   Widget _episodes(List<KodikEpisodeRef> refs) {
-    final shown = refs.length > 24 ? 24 : refs.length;
+    final seasons = refs.map((e) => e.season).toSet().toList()..sort();
+    final selected = seasons.contains(_season) ? _season! : seasons.first;
+    final visible = refs.where((e) => e.season == selected).toList()
+      ..sort((a, b) => a.episode.compareTo(b.episode));
+    final shown = visible.length > 24 ? 24 : visible.length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -615,14 +589,15 @@ class _TitleScreenState extends State<TitleScreen> {
             const Text('Серии',
                 style: TextStyle(fontSize: 19, fontWeight: FontWeight.w700)),
             const SizedBox(width: 10),
-            Text('${refs.length}',
+            Text('${visible.length}',
                 style: const TextStyle(
                     fontSize: 14, color: AppColors.textTertiary)),
             const Spacer(),
-            GestureDetector(
-              onTap: () => Navigator.of(context).push(
+            TextButton(
+              onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
-                    builder: (_) => EpisodesScreen(title: _active)),
+                    builder: (_) => EpisodesScreen(
+                        title: _active, initialSeason: selected)),
               ),
               child: const Text('Все серии',
                   style: TextStyle(
@@ -630,29 +605,50 @@ class _TitleScreenState extends State<TitleScreen> {
             ),
           ]),
         ),
+        if (_active.isSerial)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Wrap(spacing: 8, runSpacing: 8, children: [
+              for (final season in seasons)
+                ChoiceChip(
+                  label: Text('Сезон $season · ${refs.where((e) => e.season == season).length}'),
+                  selected: season == selected,
+                  onSelected: (_) => setState(() => _season = season),
+                ),
+            ]),
+          ),
+        if (_startedEpisodes.isNotEmpty)
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 6, 16, 0),
+            child: Text('· Начат просмотр',
+                style: TextStyle(fontSize: 12, color: AppColors.textTertiary)),
+          ),
+        const SizedBox(height: 8),
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 74,
-            childAspectRatio: 1.35,
+          gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 110,
+            mainAxisExtent: 56 * (MediaQuery.textScalerOf(context).scale(15) / 15),
             crossAxisSpacing: 8,
             mainAxisSpacing: 8,
           ),
           itemCount: shown,
           itemBuilder: (context, i) {
-            final ref = refs[i];
-            final watched = _isWatched(ref);
+            final ref = visible[i];
+            final watched = _startedEpisodes
+                .contains('${ref.season}:${ref.episode}');
             return GestureDetector(
-              onTap: () => _play(index: i),
+              onTap: () => _play(index: refs.indexOf(ref)),
               child: Container(
                 decoration: BoxDecoration(
                   color: watched ? AppColors.accent : AppColors.surface,
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Center(
-                  child: Text('${ref.episode}',
+                  child: Text(watched ? '${ref.episode} ·' : '${ref.episode}',
+                      semanticsLabel: '${ref.label}${watched ? ', начат просмотр' : ''}',
                       style: TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w600,
@@ -666,13 +662,6 @@ class _TitleScreenState extends State<TitleScreen> {
         ),
       ],
     );
-  }
-
-  bool _isWatched(KodikEpisodeRef ref) {
-    final r = _resume;
-    if (r == null || r.title.id != _active.id) return false;
-    if (r.season != ref.season) return false;
-    return r.episode != null && ref.episode < r.episode!;
   }
 
   Widget _ratingBlock(KodikTitle r) {
@@ -846,7 +835,7 @@ class _TitleScreenState extends State<TitleScreen> {
   ButtonStyle get _pillStyle => OutlinedButton.styleFrom(
         side: const BorderSide(color: AppColors.outline),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        padding: const EdgeInsets.symmetric(vertical: 11),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
       );
 
   /// Studio names often already say "Subtitles"; avoid stating it twice.
@@ -877,7 +866,10 @@ class _TitleScreenState extends State<TitleScreen> {
   }
 
   Widget _roundIcon(IconData icon, VoidCallback onTap) {
-    return Material(
+    return Semantics(button: true,
+      label: icon == Icons.arrow_back ? 'Назад' :
+        (_favorite ? 'Убрать из избранного' : 'В избранное'),
+      child: Material(
       color: AppColors.surface.withOpacity(0.9),
       borderRadius: BorderRadius.circular(14),
       child: InkWell(
@@ -888,7 +880,7 @@ class _TitleScreenState extends State<TitleScreen> {
             height: 44,
             child: Icon(icon, color: AppColors.textPrimary, size: 22)),
       ),
-    );
+    ));
   }
 
   String _countryLine(KodikTitle r) {

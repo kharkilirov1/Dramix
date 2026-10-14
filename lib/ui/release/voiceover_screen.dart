@@ -7,6 +7,54 @@ import '../../core/theme.dart';
 import '../player/player_screen.dart';
 import '../widgets.dart';
 
+
+
+/// A resume target is usable only when this rendition contains that episode.
+/// Without a match, start in the explicitly selected season instead.
+int playbackStartIndex(List<KodikEpisodeRef> episodes, WatchEntry? resume,
+    {int? selectedSeason}) {
+  if (episodes.isEmpty) return 0;
+  if (resume != null) {
+    final match = episodes.indexWhere((e) =>
+        e.season == resume.season && e.episode == resume.episode);
+    if (match >= 0) return match;
+  }
+  final selected = episodes.indexWhere((e) => e.season == selectedSeason);
+  return selected < 0 ? 0 : selected;
+}
+
+String playbackActionLabel(List<KodikEpisodeRef> episodes, WatchEntry? resume,
+    {int? selectedSeason}) {
+  if (episodes.isEmpty) return 'Нет доступных серий';
+  final index = playbackStartIndex(episodes, resume,
+      selectedSeason: selectedSeason);
+  final target = episodes[index];
+  final matches = resume != null && target.season == resume.season &&
+      target.episode == resume.episode;
+  return matches && (resume?.positionMs ?? 0) > 0
+      ? 'Продолжить · ${target.label}'
+      : 'Смотреть · ${target.label}';
+}
+
+/// Episode markers use the work identity, while playback retains provider IDs.
+/// The newest checkpoint wins, including an explicit reset to zero.
+Future<Set<String>> startedEpisodesForWork(
+    SavedTitleRef title, List<WatchEntry> history) async {
+  final work = await Library.workId(title.id);
+  final identities = <String, String>{};
+  final seen = <String>{};
+  final started = <String>{};
+  for (final entry in history) {
+    final identity = identities[entry.title.id] ??=
+        await Library.workId(entry.title.id);
+    if (identity != work) continue;
+    final episode = '${entry.season}:${entry.episode}';
+    if (!seen.add(episode)) continue;
+    if (entry.positionMs > 0) started.add(episode);
+  }
+  return started;
+}
+
 /// Выбор озвучки: full-screen list of the dubbing studios Kodik has for this
 /// title, each showing how many episodes it covers.
 class VoiceoverScreen extends StatefulWidget {
@@ -35,7 +83,11 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
       _error = null;
     });
     try {
+      await Library.registerTitle(widget.title.ref);
       final list = await KodikApi.instance.versions(widget.title);
+      for (final version in list) {
+        await Library.registerTitle(version.ref);
+      }
       if (mounted) {
         setState(() {
           _versions = list;
@@ -45,7 +97,7 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = '$e';
+          _error = 'Не удалось загрузить варианты просмотра. Проверьте соединение.';
           _loading = false;
         });
       }
@@ -56,10 +108,11 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
   Widget build(BuildContext context) {
     return PageScaffold(
       title: 'Выберите вариант',
-      body: Column(children: [
+      body: Align(alignment: Alignment.topCenter, child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 920), child: Column(children: [
         const _HintCard(
-          text: 'Напротив каждого варианта озвучки указано количество озвученных '
-              'серий. Если серия не запускается, попробуйте другой вариант.',
+          text: 'Выберите озвучку или субтитры, затем сезон и серию. '
+              'Доступные серии могут различаться между вариантами.',
         ),
         Expanded(
           child: _loading
@@ -70,8 +123,8 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
                   ? ErrorCentered(message: _error!, onRetry: _load)
                   : _versions.isEmpty
                       ? const Center(
-                          child: Text('Нет доступных озвучек',
-                              style: TextStyle(color: AppColors.textTertiary)))
+                          child: Text('Нет доступных вариантов просмотра',
+                              style: const TextStyle(color: AppColors.textTertiary)))
                       : ListView.separated(
                           itemCount: _versions.length,
                           separatorBuilder: (_, __) => const Divider(
@@ -103,7 +156,9 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
                                         const SizedBox(height: 3),
                                         Text(
                                           [
-                                            '${v.totalEpisodes ?? 0} эп.',
+                                            if (v.totalEpisodes != null && v.totalEpisodes! > 0)
+                                              '${v.totalEpisodes} серий в каталоге'
+                                            else 'Количество серий не указано',
                                             if ((v.quality ?? '').isNotEmpty)
                                               v.quality!,
                                           ].join(' · '),
@@ -114,6 +169,10 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
                                       ],
                                     ),
                                   ),
+                                  if (v.id == widget.title.id)
+                                    const Padding(padding: EdgeInsets.only(right: 8),
+                                      child: Icon(Icons.check_circle_outline,
+                                        color: AppColors.textSecondary)),
                                   if (isSub)
                                     Container(
                                       margin: const EdgeInsets.only(right: 10),
@@ -138,7 +197,7 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
                           },
                         ),
         ),
-      ]),
+      ]))),
     );
   }
 }
@@ -148,7 +207,9 @@ class _VoiceoverScreenState extends State<VoiceoverScreen> {
 class EpisodesScreen extends StatefulWidget {
   final KodikTitle title;
 
-  const EpisodesScreen({super.key, required this.title});
+  final int? initialSeason;
+
+  const EpisodesScreen({super.key, required this.title, this.initialSeason});
 
   @override
   State<EpisodesScreen> createState() => _EpisodesScreenState();
@@ -156,32 +217,64 @@ class EpisodesScreen extends StatefulWidget {
 
 class _EpisodesScreenState extends State<EpisodesScreen> {
   List<KodikEpisodeRef> _episodes = const <KodikEpisodeRef>[];
+  int? _season;
+  bool _descending = false;
+  bool _loading = true;
+  String? _error;
+  late KodikTitle _title;
   WatchEntry? _resume;
+  Set<String> _startedEpisodes = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _episodes = widget.title.episodeRefs;
+    _title = widget.title;
+    _episodes = _title.episodeRefs;
+    _season = widget.initialSeason;
     _loadLocal();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final full = await KodikApi.instance.byId(widget.title.id);
+      if (!mounted) return;
+      if (full != null) {
+        _title = full;
+        _episodes = full.episodeRefs;
+      }
+      await _loadLocal();
+    } catch (_) {
+      if (mounted) setState(() =>
+        _error = 'Не удалось обновить серии. Доступные данные сохранены.');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
   }
 
   Future<void> _loadLocal() async {
-    final resume = await Library.resumePoint(widget.title.id);
-    if (mounted) setState(() => _resume = resume);
-  }
-
-  bool _isWatched(KodikEpisodeRef ref) {
-    final r = _resume;
-    if (r == null) return false;
-    if (r.season != ref.season) return false;
-    return r.episode != null && ref.episode < r.episode!;
+    try {
+      await Library.registerTitle(_title.ref);
+      final resume = await Library.resumePoint(_title.id);
+      final history = await Library.history();
+      final started = await startedEpisodesForWork(_title.ref, history);
+      if (!mounted) return;
+      setState(() {
+        _season ??= resume?.season;
+        _resume = resume;
+        _startedEpisodes = started;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _error = 'Не удалось прочитать историю просмотра.');
+    }
   }
 
   Future<void> _open(int index) async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => PlayerScreen(
-          title: widget.title,
+          title: _title,
           episodes: _episodes,
           initialIndex: index,
         ),
@@ -192,16 +285,30 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final t = widget.title.translation;
+    final t = _title.translation;
     final studio = t?.title ?? 'Источник';
+    final seasons = _episodes.map((e) => e.season).toSet().toList()..sort();
+    final selected = seasons.contains(_season)
+        ? _season
+        : (seasons.isEmpty ? null : seasons.first);
+    final visible = _episodes.where((e) => e.season == selected).toList()
+      ..sort((a, b) => a.episode.compareTo(b.episode));
+    if (_descending) {
+      final reversed = visible.reversed.toList();
+      visible
+        ..clear()
+        ..addAll(reversed);
+    }
 
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: SafeArea(
         bottom: false,
-        child: Column(children: [
+        child: Center(child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 920),
+          child: Column(children: [
           SizedBox(
-            height: 64,
+            height: 64 * (MediaQuery.textScalerOf(context).scale(16) / 16),
             child: Row(children: [
               IconButton(
                 icon: const Icon(Icons.arrow_back,
@@ -217,30 +324,51 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                     const Text('Выберите серию',
                         style: TextStyle(
                             fontSize: 19, fontWeight: FontWeight.w700)),
-                    Text('Источник $studio',
+                    Text(studio,
+                        maxLines: 1, overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                             fontSize: 13, color: AppColors.textSecondary)),
                   ],
                 ),
               ),
               IconButton(
+                tooltip: _descending ? 'Сначала ранние серии' : 'Сначала поздние серии',
                 icon: const Icon(Icons.swap_vert_rounded,
                     size: 24, color: AppColors.textSecondary),
                 onPressed: _episodes.length < 2
                     ? null
-                    : () => setState(
-                        () => _episodes = _episodes.reversed.toList()),
+                    : () => setState(() => _descending = !_descending),
               ),
             ]),
           ),
           const Divider(height: 1, color: AppColors.outline),
+          if (_loading) const LinearProgressIndicator(),
+          if (_error != null) Padding(padding: const EdgeInsets.all(12),
+            child: Column(children: [Text(_error!),
+              TextButton(onPressed: _loading ? null : _load, child: const Text('Повторить'))])),
+          if (_title.isSerial && seasons.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: DropdownButton<int>(
+                value: selected,
+                isExpanded: true,
+                items: [
+                  for (final season in seasons)
+                    DropdownMenuItem(
+                      value: season,
+                      child: Text('Сезон $season · ${_episodes.where((e) => e.season == season).length} серий'),
+                    ),
+                ],
+                onChanged: (season) => setState(() => _season = season),
+              ),
+            ),
           Expanded(
             child: _episodes.isEmpty
-                ? const Center(
-                    child: Text('Нет эпизодов',
+                ? Center(
+                    child: Text(_loading ? 'Загружаем серии…' : 'В этом варианте нет доступных серий',
                         style: TextStyle(color: AppColors.textTertiary)))
                 : ListView.builder(
-                    itemCount: _episodes.length + 2,
+                    itemCount: visible.length + 2,
                     itemBuilder: (context, i) {
                       if (i == 0) {
                         return Padding(
@@ -255,24 +383,25 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                       }
                       if (i == 1) {
                         return const _HintCard(
-                          text: 'Если серия не запускается, попробуйте другую '
-                              'озвучку. Реклама в видео к приложению отношения '
-                              'не имеет.',
+                          text: 'Метка «Начат просмотр» обозначает сохранённую позицию, '
+                              'а не завершённую серию. Продолжение с точной секунды '
+                              'зависит от выбранного плеера.',
                         );
                       }
-                      final ref = _episodes[i - 2];
-                      final watched = _isWatched(ref);
+                      final ref = visible[i - 2];
+                      final watched = _startedEpisodes
+                          .contains('${ref.season}:${ref.episode}');
                       return InkWell(
-                        onTap: () => _open(i - 2),
+                        onTap: () => _open(_episodes.indexOf(ref)),
                         child: Padding(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 18),
                           child: Row(children: [
                             Expanded(
                               child: Text(
-                                ref.episode == 1 && _episodes.length == 1
+                                !_title.isSerial && _episodes.length == 1
                                     ? 'Полнометражный фильм'
-                                    : 'Серия ${ref.episode}',
+                                    : 'Сезон ${ref.season} · Серия ${ref.episode}',
                                 style: TextStyle(
                                     fontSize: 16,
                                     color: watched
@@ -281,15 +410,19 @@ class _EpisodesScreenState extends State<EpisodesScreen> {
                               ),
                             ),
                             if (watched)
-                              const Icon(Icons.check_rounded,
-                                  size: 18, color: AppColors.badgeNew),
+                              Flexible(child: Text(_resume?.season == ref.season &&
+                                  _resume?.episode == ref.episode
+                                    ? 'Продолжить' : 'Начат просмотр',
+                                  style: const TextStyle(
+                                      fontSize: 12,
+                                      color: AppColors.textSecondary))),
                           ]),
                         ),
                       );
                     },
                   ),
           ),
-        ]),
+        ]))),
       ),
     );
   }

@@ -12,8 +12,6 @@ const _title = KodikTitle(
   title: 'Сохранённый просмотр',
 );
 
-// An unavailable URL exercises the real opening and disposal paths without
-// creating a platform WebView or a native video controller.
 const _episodes = <KodikEpisodeRef>[
   KodikEpisodeRef(season: 1, episode: 1, url: ''),
 ];
@@ -31,7 +29,6 @@ Future<void> _openUnavailablePlayer(WidgetTester tester) async {
     home: PlayerScreen(title: _title, episodes: _episodes),
   ));
   await tester.pump();
-
   expect(find.text('Ссылка на серию отсутствует'), findsOneWidget);
   expect(tester.takeException(), isNull);
 }
@@ -41,56 +38,58 @@ void main() {
 
   setUp(() => SharedPreferences.setMockInitialValues(<String, Object>{}));
 
-  testWidgets('opening without a native position preserves the checkpoint',
-      (tester) async {
-    await Library.record(_checkpoint(60000));
-
-    await _openUnavailablePlayer(tester);
-
-    final resume = await Library.resumePoint(_title.id);
-    expect(resume, isNotNull);
-    expect(resume!.positionMs, 60000);
-  });
-
-  testWidgets('disposing without a native position preserves the checkpoint',
+  testWidgets('opening and closing an unavailable episode creates no history',
       (tester) async {
     await _openUnavailablePlayer(tester);
-    // Seed after opening so this assertion isolates the disposal write.
-    await Library.record(_checkpoint(90000));
-
+    expect(await Library.history(), isEmpty);
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
-
-    final resume = await Library.resumePoint(_title.id);
-    expect(resume, isNotNull);
-    expect(resume!.positionMs, 90000);
+    expect(await Library.history(), isEmpty);
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('finds the same episode behind a newer different checkpoint',
+  testWidgets('returning from an unavailable episode does not mark it watched',
+      (tester) async {
+    await _openUnavailablePlayer(tester);
+    expect(find.text('Повторить'), findsNothing);
+    await tester.tap(find.text('Вернуться к выбору серии'));
+    await tester.pump();
+    expect(await Library.history(), isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('an unavailable player preserves the exact saved checkpoint',
+      (tester) async {
+    await Library.record(_checkpoint(60000));
+    await _openUnavailablePlayer(tester);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    final resume = await Library.resumePoint(_title.id);
+    expect(resume, isNotNull);
+    expect(resume!.positionMs, 60000);
+    expect(resume.watchedAt, DateTime(2024, 1, 1));
+  });
+
+  testWidgets('opening an older episode does not reorder history',
       (tester) async {
     await Library.record(_checkpoint(60000));
     await Library.record(_checkpoint(90000, episode: 2));
-
     await _openUnavailablePlayer(tester);
-
-    final resume = await Library.resumePoint(_title.id);
-    expect(resume, isNotNull);
-    expect(resume!.episode, 1);
-    expect(resume.positionMs, 60000);
-  });
-
-  testWidgets('does not copy a different episode position into a new episode',
-      (tester) async {
-    await Library.record(_checkpoint(90000, episode: 2));
-
-    await _openUnavailablePlayer(tester);
-
     final history = await Library.history();
     expect(history, hasLength(2));
-    expect(history.first.episode, 1);
-    expect(history.first.positionMs, 0);
-    expect(history.last.episode, 2);
-    expect(history.last.positionMs, 90000);
+    expect(history.first.episode, 2);
+    expect(history.first.positionMs, 90000);
+    expect(history.last.episode, 1);
+    expect(history.last.positionMs, 60000);
+  });
+
+  testWidgets('a different episode checkpoint does not create a false entry',
+      (tester) async {
+    await Library.record(_checkpoint(90000, episode: 2));
+    await _openUnavailablePlayer(tester);
+    final history = await Library.history();
+    expect(history, hasLength(1));
+    expect(history.single.episode, 2);
+    expect(history.single.positionMs, 90000);
   });
 }

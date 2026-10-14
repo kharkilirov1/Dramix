@@ -15,6 +15,7 @@ import 'ui/schedule/schedule_screen.dart';
 import 'ui/search/search_screen.dart';
 import 'ui/settings/settings_screen.dart';
 import 'ui/widgets.dart';
+import 'ui/backend_dialog.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -73,7 +74,9 @@ class _AppGateState extends State<AppGate> {
       _error = null;
     });
     try {
-      await KodikApi.instance.tokens.ensure();
+      if (Net.backendOrigin == null) {
+        await KodikApi.instance.tokens.ensure();
+      }
       if (mounted) setState(() => _loading = false);
     } on KodikTokenException catch (e) {
       if (mounted) {
@@ -119,12 +122,16 @@ class _AppGateState extends State<AppGate> {
     );
     controller.dispose();
     if (value == null || value.isEmpty) return;
-    final ok = await KodikApi.instance.tokens.setUserToken(value);
-    if (!mounted) return;
-    if (ok) {
-      await _boot();
-    } else {
-      showMessage(context, 'Токен не подошёл');
+    try {
+      final ok = await KodikApi.instance.tokens.setUserToken(value);
+      if (!mounted) return;
+      if (ok) {
+        await _boot();
+      } else {
+        showMessage(context, 'Токен не подошёл');
+      }
+    } on KodikTokenException catch (e) {
+      if (mounted) showMessage(context, e.message);
     }
   }
 
@@ -133,7 +140,10 @@ class _AppGateState extends State<AppGate> {
     if (_loading) return const _Splash();
     if (_error != null) {
       return _TokenError(
-          message: _error!, onRetry: _boot, onEnterToken: _enterToken);
+          message: _error!, onRetry: _boot, onEnterToken: _enterToken,
+          onConfigureBackend: () async {
+            if (await configureBackend(context) && mounted) await _boot();
+          });
     }
     return const RootShell();
   }
@@ -175,11 +185,13 @@ class _TokenError extends StatelessWidget {
   final String message;
   final VoidCallback onRetry;
   final VoidCallback onEnterToken;
+  final VoidCallback onConfigureBackend;
 
   const _TokenError({
     required this.message,
     required this.onRetry,
     required this.onEnterToken,
+    required this.onConfigureBackend,
   });
 
   @override
@@ -211,6 +223,10 @@ class _TokenError extends StatelessWidget {
                 TextButton(
                   onPressed: onEnterToken,
                   child: const Text('Ввести свой токен'),
+                ),
+                TextButton(
+                  onPressed: onConfigureBackend,
+                  child: const Text('Подключить свой сервер каталога'),
                 ),
               ],
             ),

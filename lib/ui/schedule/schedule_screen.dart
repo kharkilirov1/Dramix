@@ -6,10 +6,12 @@ import '../../core/theme.dart';
 import '../release/title_screen.dart';
 import '../widgets.dart';
 
-/// Расписание: Kodik has no airing calendar, so the reference Пн–Вс tabs show
-/// the recently updated feed grouped by the weekday of `KodikTitle.updatedAt`.
+/// A finite recent-update sample grouped by the local weekday of updatedAt.
+/// This is not an airing calendar or proof that an episode was released.
 class ScheduleScreen extends StatefulWidget {
-  const ScheduleScreen({super.key});
+  final Future<KodikPage> Function()? loader;
+
+  const ScheduleScreen({super.key, this.loader});
 
   @override
   State<ScheduleScreen> createState() => _ScheduleScreenState();
@@ -19,7 +21,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   /// 1 = Пн … 7 = Вс, matching `DateTime.weekday`.
   static const List<String> _dayTabs = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-  int _day = 1;
+  int _day = DateTime.now().weekday;
+  bool _selectedByUser = false;
   bool _loading = true;
   String? _error;
 
@@ -38,27 +41,32 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
       _error = null;
     });
     try {
-      final page = await KodikApi.instance.browseFiltered(
+      final page = await (widget.loader?.call() ?? KodikApi.instance.browseFiltered(
         CatalogFilter(types: KodikCatalog.all, sort: CatalogSort.updated),
-        limit: 100,
-      );
+        limit: 50,
+      ));
       if (!mounted) return;
       final grouped = <int, List<KodikTitle>>{};
       for (final title in KodikApi.dedupe(page.results)) {
-        final weekday = title.updatedAt?.weekday;
+        final weekday = title.updatedAt?.toLocal().weekday;
         if (weekday == null) continue;
         grouped.putIfAbsent(weekday, () => <KodikTitle>[]).add(title);
       }
+      final dated = grouped.values.expand((titles) => titles).toList()
+        ..sort((a, b) => b.updatedAt!.compareTo(a.updatedAt!));
       setState(() {
+        if (!_selectedByUser && !grouped.containsKey(_day) && dated.isNotEmpty) {
+          _day = dated.first.updatedAt!.toLocal().weekday;
+        }
         _byDay
           ..clear()
           ..addAll(grouped);
         _loading = false;
       });
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _error = '$e';
+        _error = 'Не удалось загрузить обновления. Проверьте подключение и повторите попытку.';
         _loading = false;
       });
     }
@@ -78,13 +86,15 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
     }
     final titles = _byDay[_day] ?? const <KodikTitle>[];
     if (_totalTitles == 0 || titles.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.symmetric(horizontal: 32),
+          padding: const EdgeInsets.symmetric(horizontal: 32),
           child: Text(
-            'В этот день обновлений не было',
+            _totalTitles == 0
+                ? 'В загруженной выборке нет обновлений с указанной датой'
+                : 'В загруженной выборке нет обновлений за этот день недели',
             textAlign: TextAlign.center,
-            style: TextStyle(color: AppColors.textTertiary),
+            style: const TextStyle(color: AppColors.textTertiary),
           ),
         ),
       );
@@ -105,7 +115,12 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
   @override
   Widget build(BuildContext context) {
     return PageScaffold(
-      title: 'Расписание',
+      title: 'По дням',
+      actions: [IconButton(
+        tooltip: 'Обновить выборку',
+        onPressed: _loading ? null : _load,
+        icon: const Icon(Icons.refresh),
+      )],
       body: Column(
         children: [
           const Padding(
@@ -113,7 +128,8 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'Обновления дорам по дням недели',
+                'Последние обновления каталога по дням недели. '
+                'Выборка до 50 записей; это не расписание выхода серий.',
                 style: TextStyle(fontSize: 13.5, color: AppColors.textTertiary),
               ),
             ),
@@ -121,7 +137,10 @@ class _ScheduleScreenState extends State<ScheduleScreen> {
           UnderlineTabs(
             tabs: _dayTabs,
             selected: _day - 1,
-            onChanged: (i) => setState(() => _day = i + 1),
+            onChanged: (i) => setState(() {
+              _day = i + 1;
+              _selectedByUser = true;
+            }),
           ),
           Expanded(child: _body()),
         ],

@@ -89,7 +89,20 @@ class KodikApi {
 
   /// Follows a `next_page` link returned by [fetch] or [search].
   Future<KodikPage> nextPage(String url) async {
-    return KodikPage.fromJson(_asMap(await _request(Uri.parse(url))));
+    final uri = Uri.tryParse(url);
+    final backend = Net.backendOrigin;
+    final origin = backend ?? Uri.parse(base);
+    final prefix = backend == null ? '' : '/v1/catalog';
+    if (uri == null ||
+        uri.scheme != origin.scheme ||
+        uri.host != origin.host ||
+        uri.port != origin.port ||
+        uri.userInfo.isNotEmpty ||
+        uri.fragment.isNotEmpty ||
+        (uri.path != '$prefix/list' && uri.path != '$prefix/search')) {
+      throw const KodikApiException(-1, 'Некорректная ссылка следующей страницы');
+    }
+    return KodikPage.fromJson(_asMap(await _request(uri)));
   }
 
   /// Free-text search. `title` is only honoured by `/search`, not `/list`.
@@ -214,13 +227,15 @@ class KodikApi {
   }
 
   Future<dynamic> _request(Uri uri, {bool retry = true}) async {
+    final backend = Net.backendOrigin;
+    if (backend != null) return _gatewayRequest(uri, backend);
     final token = await tokens.ensure();
     final resp = await _send(_withToken(uri, token));
 
-    if (resp.statusCode == 401 && retry) {
-      // Token was revoked between validation and use — resolve a fresh one.
+    if (resp.statusCode == 401) {
+      // Remember every rejection, including a failed replacement token.
       await tokens.invalidate(rejected: token);
-      return _request(uri, retry: false);
+      if (retry) return _request(uri, retry: false);
     }
     if (resp.statusCode != 200) {
       throw KodikApiException(resp.statusCode, _describe(resp));
@@ -232,6 +247,61 @@ class KodikApi {
     } on FormatException {
       throw const KodikApiException(-1, 'Некорректный ответ Kodik');
     }
+  }
+
+
+  Future<dynamic> _gatewayRequest(Uri uri, Uri origin) async {
+    final endpoint = uri.path.split('/').last;
+    if (!const {'list', 'search', 'translations'}.contains(endpoint)) {
+      throw const KodikApiException(-1, 'Некорректный запрос каталога');
+    }
+    final params = Map<String, String>.from(uri.queryParameters)..remove('token');
+    final target = origin.replace(
+        path: '/v1/catalog/$endpoint', queryParameters: params);
+    // Never pass owned-server requests through a community CORS proxy.
+    final client = _client ?? http.Client();
+    late final http.Response response;
+    try {
+      final request = http.Request('GET', target)
+        ..followRedirects = false
+        ..headers['Accept'] = 'application/json';
+      response = await (() async {
+        return http.Response.fromStream(await client.send(request));
+      })().timeout(timeout);
+    } finally {
+      if (_client == null) client.close();
+    }
+    if (response.statusCode != 200) {
+      throw KodikApiException(response.statusCode, _describe(response));
+    }
+    dynamic decoded;
+    try {
+      decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    } on FormatException {
+      throw const KodikApiException(-1, 'Сервер вернул некорректный ответ');
+    }
+    if (endpoint == 'translations') {
+      if (decoded is! List) {
+        throw const KodikApiException(-1, 'Сервер вернул некорректный каталог');
+      }
+      return decoded;
+    }
+    if (decoded is! Map || decoded['results'] is! List ||
+        decoded['total'] is! num || decoded.containsKey('error')) {
+      throw const KodikApiException(-1, 'Сервер вернул некорректный каталог');
+    }
+    final page = Map<String, dynamic>.from(decoded);
+    // The gateway deliberately redacts provider next_page URLs (and tokens).
+    // Recreate only our own cursor URL with the same endpoint and filters.
+    final cursor = page.remove('next_cursor');
+    page.remove('next_page');
+    if (cursor != null && (cursor is! String || cursor.length > 500)) {
+      throw const KodikApiException(-1, 'Сервер вернул некорректную страницу');
+    }
+    page['next_page'] = cursor is String && cursor.isNotEmpty
+        ? target.replace(queryParameters: {...params, 'next': cursor}).toString()
+        : null;
+    return page;
   }
 
   static Uri _withToken(Uri uri, String token) {

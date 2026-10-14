@@ -59,6 +59,12 @@ class KodikTokenException implements Exception {
   String toString() => message;
 }
 
+/// A temporary service/network failure, rather than a rejected credential.
+/// Callers may retry without replacing user settings or exhausting the pool.
+class KodikTokenUnavailableException extends KodikTokenException {
+  const KodikTokenUnavailableException(super.message);
+}
+
 /// Resolves a working Kodik API token, in priority order:
 ///
 /// 1. the token that already worked in this session,
@@ -97,6 +103,8 @@ class KodikTokenStore {
   final List<String> candidates;
 
   String? _token;
+  Future<String>? _resolving;
+  int _generation = 0;
 
   /// Tokens the API refused during this session; never offered again.
   final Set<String> _rejected = <String>{};
@@ -105,9 +113,23 @@ class KodikTokenStore {
   bool get hasToken => (_token ?? '').isNotEmpty;
 
   /// Returns a validated token, resolving one if necessary.
-  Future<String> ensure({bool forceRefresh = false}) async {
-    if (!forceRefresh && hasToken) return _token!;
+  Future<String> ensure({bool forceRefresh = false}) {
+    final pending = _resolving;
+    if (pending != null) return pending;
+    if (!forceRefresh && hasToken) return Future<String>.value(_token!);
+    final operation = _resolve(forceRefresh: forceRefresh, generation: _generation);
+    late final Future<String> shared;
+    shared = operation.whenComplete(() {
+      if (identical(_resolving, shared)) _resolving = null;
+    });
+    _resolving = shared;
+    return shared;
+  }
 
+  Future<String> _resolve({
+    required bool forceRefresh,
+    required int generation,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
 
     if (!forceRefresh) {
@@ -115,12 +137,12 @@ class KodikTokenStore {
       if (cached != null &&
           !_rejected.contains(cached) &&
           await validate(cached)) {
-        return _accept(cached, prefs, persist: false);
+        return _accept(cached, prefs, persist: false, generation: generation);
       }
 
       final user = (prefs.getString(_userKey) ?? '').trim();
-      if (user.isNotEmpty && await validate(user)) {
-        return _accept(user, prefs, persist: false);
+      if (user.isNotEmpty && !_rejected.contains(user) && await validate(user)) {
+        return _accept(user, prefs, persist: false, generation: generation);
       }
     }
 
@@ -129,13 +151,13 @@ class KodikTokenStore {
       if (candidate != null &&
           !_rejected.contains(candidate) &&
           await validate(candidate)) {
-        return _accept(candidate, prefs);
+        return _accept(candidate, prefs, generation: generation);
       }
     }
 
     for (final candidate in await _fetchCommunityTokens()) {
       if (!_rejected.contains(candidate) && await validate(candidate)) {
-        return _accept(candidate, prefs);
+        return _accept(candidate, prefs, generation: generation);
       }
     }
 
@@ -150,26 +172,51 @@ class KodikTokenStore {
   /// [rejected] records a token the API just refused so re-resolution does not
   /// hand the same broken token straight back.
   Future<void> invalidate({String? rejected}) async {
-    if (rejected != null && rejected.isNotEmpty) _rejected.add(rejected);
+    if (rejected != null && rejected.isNotEmpty) {
+      final newlyRejected = _rejected.add(rejected);
+      // Multiple requests may receive 401 for the same credential. Once its
+      // recovery is underway, repeat rejection must not cancel that resolver.
+      if (!newlyRejected && _token == null) return;
+      // A delayed 401 for an old request must not discard a newer token.
+      if (_token != null && _token != rejected) return;
+    }
     _token = null;
+    final generation = ++_generation;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove(_cacheKey);
+    if (_generation == generation) await prefs.remove(_cacheKey);
   }
 
   /// Checks a candidate against the live API with a minimal request.
   Future<bool> validate(String candidate) async {
     if (candidate.trim().isEmpty) return false;
+    final uri = Uri.parse('$apiBase/search').replace(queryParameters: {
+      'token': candidate.trim(),
+      'title': 'a',
+      'limit': '1',
+    });
+    final http.Response resp;
     try {
-      final uri = Uri.parse('$apiBase/search').replace(queryParameters: {
-        'token': candidate.trim(),
-        'title': 'a',
-        'limit': '1',
-      });
-      final resp = await _get(uri);
-      return resp.statusCode == 200;
+      resp = await _get(uri);
     } catch (_) {
-      return false;
+      throw const KodikTokenUnavailableException(
+          'Не удалось связаться с Kodik. Повторите попытку позже.');
     }
+    if (resp.statusCode == 401) return false;
+    if (resp.statusCode != 200) {
+      throw KodikTokenUnavailableException(
+          'Проверка доступа Kodik недоступна (HTTP ${resp.statusCode}).');
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+      if (decoded is Map &&
+          decoded['results'] is List &&
+          decoded['total'] is num &&
+          !decoded.containsKey('error')) {
+        return true;
+      }
+    } catch (_) {}
+    throw const KodikTokenUnavailableException(
+        'Kodik вернул некорректный ответ проверки доступа.');
   }
 
   Future<String?> userToken() async {
@@ -188,13 +235,20 @@ class KodikTokenStore {
       return false;
     }
     if (!await validate(trimmed)) return false;
+    final generation = ++_generation;
     await prefs.setString(_userKey, trimmed);
-    await _accept(trimmed, prefs);
+    await _accept(trimmed, prefs, generation: generation);
     return true;
   }
 
   Future<String> _accept(String value, SharedPreferences prefs,
-      {bool persist = true}) async {
+      {bool persist = true, int? generation}) async {
+    if (generation != null && generation != _generation) {
+      final current = _token;
+      if (current != null) return current;
+      throw const KodikTokenUnavailableException(
+          'Настройки доступа изменились. Повторите запрос.');
+    }
     _token = value;
     _rejected.remove(value);
     if (persist) await prefs.setString(_cacheKey, value);
@@ -203,25 +257,37 @@ class KodikTokenStore {
   }
 
   Future<List<String>> _fetchCommunityTokens() async {
+    final http.Response resp;
     try {
-      final resp = await _get(Uri.parse(communityTokensUrl));
-      if (resp.statusCode != 200) return const [];
-      final decoded =
-          jsonDecode(utf8.decode(resp.bodyBytes, allowMalformed: true));
-      if (decoded is! Map) return const [];
+      resp = await _get(Uri.parse(communityTokensUrl));
+    } catch (_) {
+      throw const KodikTokenUnavailableException(
+          'Не удалось загрузить список доступа. Повторите попытку позже.');
+    }
+    if (resp.statusCode != 200) {
+      throw KodikTokenUnavailableException(
+          'Список доступа недоступен (HTTP ${resp.statusCode}).');
+    }
+    try {
+      final decoded = jsonDecode(utf8.decode(resp.bodyBytes));
+      if (decoded is! Map) throw const FormatException();
       final out = <String>[];
+      var recognized = false;
       for (final section in const ['stable', 'unstable', 'legacy']) {
         final list = decoded[section];
         if (list is! List) continue;
+        recognized = true;
         for (final item in list) {
-          if (item is! Map) continue;
-          final candidate = KodikTokenCrypto.decrypt(item['tokn'] as String?);
+          if (item is! Map || item['tokn'] is! String) continue;
+          final candidate = KodikTokenCrypto.decrypt(item['tokn'] as String);
           if (candidate != null && !out.contains(candidate)) out.add(candidate);
         }
       }
+      if (!recognized) throw const FormatException();
       return out;
     } catch (_) {
-      return const [];
+      throw const KodikTokenUnavailableException(
+          'Список доступа имеет некорректный формат.');
     }
   }
 

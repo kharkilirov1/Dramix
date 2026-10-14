@@ -38,6 +38,41 @@ class Net {
   const Net._();
 
   static const String _key = 'dramix.net';
+  static const String _backendKey = 'dramix.backend.origin';
+  static Uri? _backendOrigin;
+
+  /// Optional owned catalog server. Provider credentials never leave the server.
+  static Uri? get backendOrigin => _backendOrigin;
+
+  static Uri validateBackendOrigin(String value) {
+    final uri = Uri.tryParse(value.trim());
+    if (uri == null ||
+        !uri.hasAuthority || uri.host.isEmpty ||
+        uri.port < 1 || uri.port > 65535 ||
+        uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment ||
+        (uri.path.isNotEmpty && uri.path != '/') ||
+        (uri.scheme != 'https' &&
+            !(uri.scheme == 'http' &&
+                const {'localhost', '127.0.0.1', '::1', '[::1]'}.contains(uri.host)))) {
+      throw const FormatException(
+          'Укажите HTTPS-адрес сервера без пути, параметров и пароля');
+    }
+    return uri.replace(path: '');
+  }
+
+  static Future<void> setBackend(String? value) async {
+    final origin = value == null || value.trim().isEmpty
+        ? null
+        : validateBackendOrigin(value);
+    final prefs = await SharedPreferences.getInstance();
+    if (origin == null) {
+      await prefs.remove(_backendKey);
+    } else {
+      await prefs.setString(_backendKey, origin.toString());
+    }
+    _backendOrigin = origin;
+    revision.value++;
+  }
 
   /// Publicly reachable proxy used by default on web. It genuinely echoes the
   /// caller's origin in `Access-Control-Allow-Origin` (verified).
@@ -59,6 +94,13 @@ class Net {
   static Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
     _apply(prefs.getString(_key));
+    final saved = prefs.getString(_backendKey);
+    try {
+      _backendOrigin = saved == null ? null : validateBackendOrigin(saved);
+    } on FormatException {
+      _backendOrigin = null;
+      await prefs.remove(_backendKey);
+    }
   }
 
   static Future<void> set(

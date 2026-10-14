@@ -8,6 +8,8 @@ import '../../core/storage.dart';
 import '../../core/theme.dart';
 import '../premium/paywall_screen.dart';
 import '../widgets.dart';
+import '../backend_dialog.dart';
+import '../account/account_screen.dart';
 
 /// Настройки (эталон: screenshot 09) — секции с иконками, доступ к Kodik,
 /// локальные данные и сведения о приложении.
@@ -22,6 +24,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _busy = false;
   bool _forceBusy = false;
   bool _userTokenSet = false;
+  bool _editingToken = false;
+  bool _routeBusy = false;
+  String? _clearing;
+  String? _tokenError;
+
+  bool get _tokenBusy => _busy || _forceBusy || _editingToken;
 
   @override
   void initState() {
@@ -30,7 +38,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Net.revision.addListener(_onRevision);
     Premium.revision.addListener(_onRevision);
     _loadUserToken();
-    if (!KodikApi.instance.tokens.hasToken) {
+    if (Net.backendOrigin == null && !KodikApi.instance.tokens.hasToken) {
       _busy = true;
       _resolveToken();
     }
@@ -49,86 +57,152 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _loadUserToken() async {
-    final token = await KodikApi.instance.tokens.userToken();
-    if (!mounted) return;
-    setState(() => _userTokenSet = token != null);
+    try {
+      final token = await KodikApi.instance.tokens.userToken();
+      if (mounted) setState(() => _userTokenSet = token != null);
+    } catch (_) {
+      if (mounted) setState(() => _tokenError = 'Не удалось прочитать настройки доступа');
+    }
   }
 
   Future<void> _resolveToken() async {
     try {
       await KodikApi.instance.tokens.ensure();
-    } on KodikTokenException {
-      // Сообщение покажет строка статуса; отдельный snackbar не нужен.
+    } catch (_) {
+      if (mounted) setState(() => _tokenError = 'Нет подключения к каталогу. Повторите попытку.');
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  String get _maskedToken {
-    final token = KodikApi.instance.tokens.token ?? '';
-    if (token.length <= 10) return token;
-    return '${token.substring(0, 6)}…${token.substring(token.length - 4)}';
-  }
-
-  String get _tokenSubtitle => KodikApi.instance.tokens.hasToken
-      ? 'Активен · $_maskedToken'
-      : 'Не найден';
+  String get _tokenSubtitle => _tokenBusy
+      ? 'Проверяем доступ…'
+      : _tokenError ?? (KodikApi.instance.tokens.hasToken
+          ? 'Доступ активен' : 'Доступ не найден');
 
   String get _userTokenSubtitle =>
       _userTokenSet ? 'Задан' : 'Не задан — используется общий пул';
 
   Future<void> _refreshToken() async {
-    setState(() => _forceBusy = true);
+    if (_tokenBusy) return;
+    setState(() {
+      _forceBusy = true;
+      _tokenError = null;
+    });
     try {
       await KodikApi.instance.tokens.ensure(forceRefresh: true);
-      if (mounted) showMessage(context, 'Токен обновлён');
-    } on KodikTokenException catch (e) {
-      if (mounted) showMessage(context, e.message);
+      if (mounted) showMessage(context, 'Доступ обновлён');
+    } catch (_) {
+      if (mounted) {
+        setState(() => _tokenError = 'Не удалось проверить доступ. Повторите позже.');
+        showMessage(context, _tokenError!);
+      }
     } finally {
       if (mounted) setState(() => _forceBusy = false);
     }
   }
 
   Future<void> _askUserToken() async {
-    final value = await showDialog<String>(
-      context: context,
-      builder: (_) => const _TokenDialog(),
-    );
-    if (value == null) return;
-    final trimmed = value.trim();
-    if (trimmed.isEmpty) {
-      await KodikApi.instance.tokens.setUserToken(null);
-      if (!mounted) return;
-      setState(() => _userTokenSet = false);
-      showMessage(context, 'Пользовательский токен удалён');
-      return;
+    if (_tokenBusy) return;
+    setState(() => _editingToken = true);
+    try {
+      final value = await showDialog<String>(
+        context: context,
+        builder: (_) => _TokenDialog(hasUserToken: _userTokenSet),
+      );
+      if (!mounted || value == null) return;
+      final trimmed = value.trim();
+      if (trimmed.isEmpty && _userTokenSet) {
+        final remove = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            scrollable: true,
+            title: const Text('Удалить свой токен?'),
+            content: const Text('Будет восстановлен автоматический подбор доступа к Kodik.'),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Отмена')),
+              TextButton(onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Удалить')),
+            ],
+          ),
+        );
+        if (!mounted || remove != true) return;
+      }
+      if (trimmed.isEmpty) {
+        await KodikApi.instance.tokens.setUserToken(null);
+        if (mounted) {
+          setState(() {
+            _userTokenSet = false;
+            _tokenError = null;
+          });
+          showMessage(context, 'Свой токен удалён');
+        }
+      } else {
+        final ok = await KodikApi.instance.tokens.setUserToken(trimmed);
+        if (!mounted) return;
+        if (ok) setState(() {
+          _userTokenSet = true;
+          _tokenError = null;
+        });
+        showMessage(context, ok ? 'Доступ проверен' : 'Токен не подошёл');
+      }
+    } catch (_) {
+      if (mounted) showMessage(context, 'Не удалось проверить доступ. Повторите позже.');
+    } finally {
+      if (mounted) setState(() => _editingToken = false);
     }
-    final ok = await KodikApi.instance.tokens.setUserToken(trimmed);
-    if (!mounted) return;
-    if (ok) setState(() => _userTokenSet = true);
-    showMessage(context, ok ? 'Токен принят' : 'Токен не подошёл');
   }
 
-  Future<void> _confirm(String title, String message, Future<void> Function() run) async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(dialogContext, false),
-              child: const Text('Отмена')),
-          TextButton(
-              onPressed: () => Navigator.pop(dialogContext, true),
-              child: const Text('Очистить')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    await run();
-    if (!mounted) return;
-    showMessage(context, 'Готово');
+  Future<void> _configureBackend() async {
+    if (_routeBusy || _tokenBusy) return;
+    setState(() => _routeBusy = true);
+    try {
+      final changed = await configureBackend(context);
+      if (!mounted || !changed) return;
+      if (Net.backendOrigin == null && !KodikApi.instance.tokens.hasToken) {
+        setState(() {
+          _busy = true;
+          _tokenError = null;
+        });
+        await _resolveToken();
+      }
+    } catch (_) {
+      if (mounted) showMessage(context, 'Не удалось изменить подключение');
+    } finally {
+      if (mounted) setState(() => _routeBusy = false);
+    }
+  }
+
+  Future<void> _confirm(String title, String message,
+      Future<void> Function() run) async {
+    if (_clearing != null) return;
+    setState(() => _clearing = title);
+    try {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          scrollable: true,
+          title: Text(title),
+          content: Text('$message\n\nЭто очистка на этом устройстве. '
+              'Она не удаляет данные на вашем сервере.'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Отмена')),
+            TextButton(onPressed: () => Navigator.pop(dialogContext, true),
+                style: TextButton.styleFrom(foregroundColor: AppColors.badgeNew),
+                child: const Text('Очистить')),
+          ],
+        ),
+      );
+      if (!mounted || ok != true) return;
+      await run();
+      if (mounted) showMessage(context, 'Локальные данные очищены');
+    } catch (_) {
+      if (mounted) showMessage(context, 'Не удалось очистить данные. Попробуйте ещё раз.');
+    } finally {
+      if (mounted) setState(() => _clearing = null);
+    }
   }
 
   @override
@@ -159,7 +233,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               title: Premium.isPremium
                   ? 'Управление подпиской'
                   : 'Открыть Dramix Plus',
-              subtitle: 'Расширенные фильтры, история до 200 записей, подборки',
+              subtitle: 'Дополнительные фильтры и подборки',
               onTap: () async {
                 await Navigator.push(
                   context,
@@ -169,12 +243,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 if (mounted) setState(() {});
               },
             ),
+            if (Net.backendOrigin == null) ...[
             _heading('ДОСТУП К KODIK'),
             _tile(
               icon: Icons.vpn_key_outlined,
               title: 'Текущий токен',
               subtitle: _tokenSubtitle,
-              trailing: _busy
+              trailing: _tokenBusy
                   ? const SizedBox(
                       width: 18,
                       height: 18,
@@ -192,26 +267,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _action(
               icon: Icons.autorenew,
               title: 'Обновить токен',
-              subtitle: 'Пройти по пулу заново и проверить каждый',
-              onTap: _forceBusy ? null : _refreshToken,
+              subtitle: _forceBusy ? 'Проверяем доступ…' : 'Проверить подключение заново',
+              busy: _forceBusy,
+              onTap: _tokenBusy ? null : _refreshToken,
             ),
             _action(
               icon: Icons.edit_outlined,
               title: 'Ввести свой токен',
               subtitle: _userTokenSubtitle,
-              onTap: _askUserToken,
+              busy: _editingToken,
+              onTap: _tokenBusy ? null : _askUserToken,
             ),
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 6, 20, 0),
               child: Text(
-                'Kodik не выдаёт токены публично. Приложение проверяет несколько '
-                'источников и использует первый рабочий, поэтому обычно ничего '
-                'вводить не нужно.',
+                'При обычном подключении приложение подбирает рабочий доступ '
+                'к каталогу. Если у вас есть свой токен, его можно указать здесь.',
                 style: TextStyle(
                     fontSize: 12, color: AppColors.textTertiary, height: 1.45),
               ),
             ),
+            ] else
+              _tile(
+                icon: Icons.cloud_outlined,
+                title: 'Каталог через свой сервер',
+                subtitle: Net.backendOrigin!.host,
+              ),
             _heading('СЕТЬ'),
+            _action(
+              icon: Icons.dns_outlined,
+              title: 'Свой сервер каталога',
+              subtitle: Net.backendOrigin?.host ?? 'Не подключён',
+              busy: _routeBusy,
+              onTap: _routeBusy || _tokenBusy ? null : _configureBackend,
+            ),
+            if (Net.backendOrigin == null) ...[
             _tile(
               icon: Net.isDirect ? Icons.wifi : Icons.alt_route,
               title: 'Маршрут запросов',
@@ -228,7 +318,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
               icon: Icons.alt_route,
               title: 'Выбрать маршрут',
               subtitle: 'Прямое подключение или CORS-прокси',
-              onTap: _chooseRoute,
+              busy: _routeBusy,
+              onTap: _routeBusy || _tokenBusy ? null : _chooseRoute,
             ),
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 6, 20, 0),
@@ -240,9 +331,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     fontSize: 12, color: AppColors.textTertiary, height: 1.45),
               ),
             ),
-            _heading('ДАННЫЕ'),
+            ],
+            if (Net.backendOrigin != null)
+              _action(
+                icon: Icons.account_circle_outlined,
+                title: 'Аккаунт Dramix',
+                subtitle: 'Вход и перенос библиотеки на свой сервер',
+                onTap: () {
+                  final origin = Net.backendOrigin;
+                  if (origin == null) return;
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => AccountScreen(origin: origin),
+                  ));
+                },
+              ),
+            _heading('ЛОКАЛЬНЫЕ ДАННЫЕ'),
             _action(
               icon: Icons.history,
+              busy: _clearing == 'Очистить историю?',
+              destructive: true,
               title: 'Очистить историю просмотра',
               subtitle: 'Удаляет все локальные записи о просмотре',
               onTap: () => _confirm('Очистить историю?',
@@ -251,13 +358,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _action(
               icon: Icons.favorite_border,
+              busy: _clearing == 'Очистить избранное?',
+              destructive: true,
               title: 'Очистить избранное',
-              subtitle: 'Удаляет все сохранённые тайтлы',
+              subtitle: 'Удаляет локальные отметки избранного',
               onTap: () => _confirm('Очистить избранное?',
-                  'Все сохранённые тайтлы будут удалены.', Library.clearFavorites),
+                  'Все локальные отметки избранного будут удалены.', Library.clearFavorites),
             ),
             _action(
               icon: Icons.bookmark_border,
+              busy: _clearing == 'Очистить списки?',
+              destructive: true,
               title: 'Очистить списки',
               subtitle: 'Смотрю · В планах · Просмотрено · Отложено · Брошено',
               onTap: () => _confirm('Очистить списки?',
@@ -265,6 +376,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             _action(
               icon: Icons.search_off,
+              busy: _clearing == 'Очистить историю поиска?',
+              destructive: true,
               title: 'Очистить историю поиска',
               subtitle: 'Удаляет сохранённые поисковые запросы',
               onTap: () => _confirm('Очистить историю поиска?',
@@ -279,12 +392,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
             _tile(
               icon: Icons.public,
               title: 'Каталог',
-              subtitle: 'kodik-api.com',
+              subtitle: Net.backendOrigin == null
+                  ? 'Kodik · обычное подключение'
+                  : 'Kodik · через свой сервер',
             ),
             _tile(
               icon: Icons.play_circle_outline,
               title: 'Плеер',
-              subtitle: 'kodikplayer.com + нативный HLS',
+              subtitle: 'Встроенный плеер Kodik',
             ),
           ],
         ),
@@ -322,12 +437,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _chooseRoute() async {
+    if (_routeBusy || _tokenBusy) return;
+    setState(() => _routeBusy = true);
+    try {
     final choice = await showModalBottomSheet<String>(
       context: context,
       backgroundColor: AppColors.surface,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) => SafeArea(
+        child: SingleChildScrollView(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
           const Padding(
             padding: EdgeInsets.all(14),
@@ -360,6 +480,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onTap: () => Navigator.pop(context, 'reset'),
           ),
         ]),
+        ),
       ),
     );
     if (!mounted || choice == null) return;
@@ -376,7 +497,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (!mounted) return;
     setState(() {});
-    showMessage(context, 'Маршрут обновлён');
+    showMessage(context, 'Подключение обновлено');
+    } catch (_) {
+      if (mounted) showMessage(context, 'Не удалось изменить подключение');
+    } finally {
+      if (mounted) setState(() => _routeBusy = false);
+    }
   }
 
   Widget _tile({
@@ -421,9 +547,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String title,
     String? subtitle,
     VoidCallback? onTap,
+    bool busy = false,
+    bool destructive = false,
   }) {
-    return InkWell(
-      onTap: onTap,
+    final enabled = onTap != null && !busy &&
+        (!destructive || _clearing == null);
+    return Semantics(
+      button: true,
+      enabled: enabled,
+      child: Material(
+      color: Colors.transparent,
+      child: InkWell(
+      onTap: enabled ? onTap : null,
       borderRadius: BorderRadius.circular(14),
       child: Container(
         margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -433,7 +568,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
         padding: const EdgeInsets.all(14),
         child: Row(children: [
-          Icon(icon, size: 22, color: AppColors.textSecondary),
+          Icon(icon, size: 22, color: destructive
+              ? AppColors.badgeNew : AppColors.textSecondary),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
@@ -451,9 +587,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ],
             ),
           ),
-          const Icon(Icons.chevron_right,
-              size: 20, color: AppColors.textTertiary),
+          if (busy)
+            const SizedBox(width: 20, height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2))
+          else
+            Icon(Icons.chevron_right,
+                size: 20, color: enabled
+                    ? AppColors.textSecondary : AppColors.textTertiary),
         ]),
+      ),
+      ),
       ),
     );
   }
@@ -461,7 +604,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
 /// Диалог ручного ввода токена. Владеет своим [TextEditingController].
 class _TokenDialog extends StatefulWidget {
-  const _TokenDialog();
+  final bool hasUserToken;
+  const _TokenDialog({required this.hasUserToken});
 
   @override
   State<_TokenDialog> createState() => _TokenDialogState();
@@ -479,20 +623,31 @@ class _TokenDialogState extends State<_TokenDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      scrollable: true,
       title: const Text('Свой токен Kodik'),
       content: TextField(
         controller: _controller,
         autofocus: true,
+        obscureText: true,
+        autocorrect: false,
+        enableSuggestions: false,
+        onChanged: (_) => setState(() {}),
         decoration: const InputDecoration(
+            labelText: 'Токен',
             hintText: '32 hex-символа',
             hintStyle: TextStyle(color: AppColors.textTertiary)),
       ),
       actions: [
         TextButton(
             onPressed: () => Navigator.pop(context), child: const Text('Отмена')),
+        if (widget.hasUserToken)
+          TextButton(
+              onPressed: () => Navigator.pop(context, ''),
+              child: const Text('Удалить свой токен')),
         TextButton(
-            onPressed: () => Navigator.pop(context, _controller.text),
-            child: const Text('Сохранить')),
+            onPressed: _controller.text.trim().isEmpty
+                ? null : () => Navigator.pop(context, _controller.text),
+            child: const Text('Проверить')),
       ],
     );
   }
