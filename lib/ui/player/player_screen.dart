@@ -547,6 +547,11 @@ class _PlayerScreenState extends State<PlayerScreen>
                 ),
               ),
             ),
+            if (_mode == _Mode.web && !widget.provider.capabilities.resumeSeek)
+              const Padding(padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                child: Text('Точная позиция не восстанавливается автоматически в веб-плеере.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white60, fontSize: 12))),
             _episodeStrip(),
           ],
         ),
@@ -604,6 +609,7 @@ class _PlayerScreenState extends State<PlayerScreen>
       child: Row(
         children: [
           IconButton(
+            tooltip: 'Назад к сериям',
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: () => Navigator.of(context).maybePop(),
           ),
@@ -621,11 +627,16 @@ class _PlayerScreenState extends State<PlayerScreen>
                       fontWeight: FontWeight.w600),
                 ),
                 Text(
-                  ep?.label ?? '',
+                  ep?.label ?? 'Нет доступной серии',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(color: Colors.white70, fontSize: 12.5),
                 ),
+                if (widget.title.translation != null)
+                  Text(
+                    '${widget.title.translation!.isVoice ? 'Озвучка' : 'Субтитры'} · ${widget.title.translation!.title}',
+                    maxLines: 1, overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(color: Colors.white60, fontSize: 12)),
               ],
             ),
           ),
@@ -636,10 +647,10 @@ class _PlayerScreenState extends State<PlayerScreen>
               onPressed: _openComments,
             ),
           if (_mode == _Mode.native)
-            TextButton(
+            IconButton(
+              tooltip: 'Вернуться в веб-плеер',
               onPressed: _useWebPlayer,
-              child: const Text('Веб-плеер',
-                  style: TextStyle(color: Colors.white70, fontSize: 12.5)),
+              icon: const Icon(Icons.web_rounded, color: Colors.white70),
             ),
         ],
       ),
@@ -648,7 +659,9 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Widget _surface() {
     if (_mode == _Mode.error) {
-      return Padding(
+      return SingleChildScrollView(child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 620),
+        child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -659,14 +672,18 @@ class _PlayerScreenState extends State<PlayerScreen>
               style: const TextStyle(color: Colors.white70),
             ),
             const SizedBox(height: 12),
-            TextButton(
-              onPressed: () => _open(_index),
-              child: const Text('Повторить',
-                  style: TextStyle(color: AppColors.accent)),
-            ),
+            if (_episode != null && _episode!.url.isNotEmpty)
+              TextButton(
+                onPressed: () => _open(_index),
+                child: const Text('Повторить',
+                    style: TextStyle(color: Colors.white)),
+              )
+            else
+              TextButton(onPressed: () => Navigator.of(context).maybePop(),
+                child: const Text('Вернуться к выбору серии')),
           ],
         ),
-      );
+      )));
     }
     if (_mode == _Mode.native) {
       final vc = _vc;
@@ -753,6 +770,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             children: [
               if (_index > 0)
                 IconButton(
+                  tooltip: 'Предыдущая серия',
                   icon: const Icon(Icons.skip_previous_rounded,
                       color: Colors.white, size: 32),
                   onPressed: () => _goTo(_index - 1),
@@ -760,7 +778,9 @@ class _PlayerScreenState extends State<PlayerScreen>
               const SizedBox(width: 14),
               ValueListenableBuilder<VideoPlayerValue>(
                 valueListenable: vc,
-                builder: (context, value, _) => GestureDetector(
+                builder: (context, value, _) => Semantics(
+                  button: true, label: value.isPlaying ? 'Пауза' : 'Воспроизвести',
+                  child: GestureDetector(
                   onTap: () => unawaited(
                       (value.isPlaying ? vc.pause() : _play(vc))
                           .catchError((Object _) {})),
@@ -777,17 +797,19 @@ class _PlayerScreenState extends State<PlayerScreen>
                       size: 36,
                     ),
                   ),
-                ),
+                )),
               ),
               const SizedBox(width: 14),
               if (_index < widget.episodes.length - 1)
                 IconButton(
+                  tooltip: 'Следующая серия',
                   icon: const Icon(Icons.skip_next_rounded,
                       color: Colors.white, size: 32),
                   onPressed: () => _goTo(_index + 1),
                 ),
               const SizedBox(width: 6),
               IconButton(
+                tooltip: _fullscreen ? 'Выйти из полного экрана' : 'Полный экран',
                 icon: Icon(
                   _fullscreen
                       ? Icons.fullscreen_exit_rounded
@@ -807,9 +829,10 @@ class _PlayerScreenState extends State<PlayerScreen>
 
   Widget _episodeStrip() {
     if (widget.episodes.length < 2) return const SizedBox.shrink();
+    final scale = MediaQuery.textScalerOf(context).scale(14) / 14;
     return Container(
       color: AppColors.bg,
-      height: 78,
+      height: 88 * scale,
       child: ListView.separated(
         padding: const EdgeInsets.all(12),
         scrollDirection: Axis.horizontal,
@@ -818,22 +841,24 @@ class _PlayerScreenState extends State<PlayerScreen>
         itemBuilder: (context, i) {
           final ref = widget.episodes[i];
           final active = i == _index;
-          return GestureDetector(
-            onTap: () => _goTo(i),
-            child: Container(
-              width: 52,
-              decoration: BoxDecoration(
-                color: active ? AppColors.accent : AppColors.surface,
+          return Semantics(
+            button: true, selected: active, label: ref.label,
+            child: Material(
+              color: active ? AppColors.accent : AppColors.surface,
+              borderRadius: BorderRadius.circular(10),
+              child: InkWell(
                 borderRadius: BorderRadius.circular(10),
-              ),
-              child: Center(
-                child: Text(
-                  '${ref.episode}',
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: active ? Colors.white : AppColors.textSecondary,
-                  ),
+                onTap: () => _goTo(i),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  child: Column(mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('Сезон ${ref.season}',
+                        style: const TextStyle(fontSize: 11, color: Colors.white60)),
+                      Text('Серия ${ref.episode}',
+                        style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600,
+                          color: active ? Colors.white : AppColors.textSecondary)),
+                    ]),
                 ),
               ),
             ),
