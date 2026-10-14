@@ -280,7 +280,8 @@ Kodik is a video catalog, not a community. Wire visible features to real data:
    do not fake them. Local data comes from `Library`. Where a reference screen
    has no Kodik equivalent, adapt or remove the placeholder and honestly state the situation.
 7. Run formatter, analyzer and tests before merge. If execution is unavailable,
-   keep the PR draft and explicitly record that validation did not run.
+   explicitly record that validation did not run. Keep the PR draft unless the
+   repository owner explicitly authorizes merging with those limits.
 
 ## Playback and local library
 

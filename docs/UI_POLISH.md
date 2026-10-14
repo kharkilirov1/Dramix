@@ -40,7 +40,8 @@ Actions attempts stopped before runner allocation, without executing a step.
 Backend tests were subsequently executed: 23 unittest cases and 35 HTTP smoke
 assertions passed. See [the executed validation report](validation-2026-10-14.md)
 for the exact source and limits. Flutter checks remain unexecuted after a sandbox
-runtime failure. Keep the draft unmerged until Flutter checks and device playback pass.
+runtime failure. The repository owner subsequently authorized merging with those limits;
+Flutter checks and device playback remain pending.
 
 No screenshot or rendered app preview was produced here. Code review alone
 does not verify actual layout or current third-party iframe event behavior.

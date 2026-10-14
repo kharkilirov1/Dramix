@@ -59,7 +59,8 @@ after execution failed. Official Flutter source tag 3.24.5 and Dart 3.5.4 were
 identified; this does not establish a working Flutter toolchain.
 
 GitHub Actions for PR #8 also stopped before runner allocation and performed
-zero steps. Keep the PR draft pending actual Flutter checks and device playback.
+zero steps. The repository owner subsequently authorized merging with these known limits.
+Actual Flutter checks and device playback remain pending.
 
 Logs were saved under `/home/user/dramix-validation-results` in the execution
 sandbox. That sandbox is currently unavailable, so those paths are not
