@@ -188,8 +188,10 @@ class _TitleScreenState extends State<TitleScreen> {
         _favorite = favorite; _status = status; _rating = rating; _resume = resume;
       });
     } catch (_) {
-      if (mounted && request == _localRequest) setState(() =>
-        _localError = 'Не удалось прочитать локальную историю.');
+      if (mounted && request == _localRequest) setState(() {
+        _localError = 'Не удалось прочитать локальную историю.';
+        _resume = null;
+      });
     } finally {
       if (mounted && request == _localRequest) setState(() => _localLoading = false);
     }
@@ -429,9 +431,9 @@ class _TitleScreenState extends State<TitleScreen> {
   }
 
   Widget _playRow(List<KodikEpisodeRef> refs) {
-    final available = refs.isNotEmpty && _localError == null;
+    final available = refs.isNotEmpty;
     final label = _localLoading ? 'Проверяем историю…'
-        : _localError != null ? 'История недоступна' : playbackActionLabel(refs, _resume, selectedSeason: _season);
+        : playbackActionLabel(refs, _resume, selectedSeason: _season);
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
