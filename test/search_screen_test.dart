@@ -102,4 +102,26 @@ void main() {
     expect(field.decoration!.hintText, 'Поиск: фильмы');
   });
 
+
+  testWidgets('scope labels fit at 320px with enlarged text', (tester) async {
+    tester.view.physicalSize = const Size(320, 700);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(MaterialApp(
+      theme: buildTheme(),
+      home: MediaQuery(
+        data: const MediaQueryData(
+          size: Size(320, 700), textScaler: TextScaler.linear(2)),
+        child: const SearchScreen(),
+      ),
+    ));
+    await tester.pump();
+    expect(find.byType(UnderlineTabs), findsOneWidget);
+    await tester.ensureVisible(find.text('Всё'));
+    await tester.tap(find.text('Всё'));
+    await tester.pump();
+    expect(tester.takeException(), isNull);
+  });
+
 }

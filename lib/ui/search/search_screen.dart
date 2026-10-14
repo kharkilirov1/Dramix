@@ -152,39 +152,11 @@ class _SearchScreenState extends State<SearchScreen> {
             ]),
           ),
           const Divider(height: 1, color: AppColors.outline),
-          SizedBox(
-            height: 44,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(children: [
-                const SizedBox(width: 16),
-                for (final (i, label) in _scopeLabels.indexed) ...[
-                  Semantics(
-                    button: true,
-                    selected: _scope == i,
-                    child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => setState(() {
-                      _scope = i;
-                    }),
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 10),
-                      child: Text(label,
-                          style: TextStyle(
-                              fontSize: 14.5,
-                              fontWeight: _scope == i
-                                  ? FontWeight.w700
-                                  : FontWeight.w400,
-                              color: _scope == i
-                                  ? AppColors.textPrimary
-                                  : AppColors.textTertiary)),
-                    ),
-                  )),
-                  const SizedBox(width: 14),
-                ],
-              ]),
-            ),
+          UnderlineTabs(
+            tabs: _scopeLabels,
+            selected: _scope,
+            separator: 14,
+            onChanged: (scope) => setState(() => _scope = scope),
           ),
           Expanded(child: _results()),
         ]),
