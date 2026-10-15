@@ -1,0 +1,32 @@
+# Codemagic configuration: build an unsigned iOS IPA without an Apple account.
+#
+# Signing happens on the iPhone (AltStore) with the owner's Apple ID, so this
+# workflow needs no certificates. Codemagic's free tier includes a monthly
+# allowance of macOS build minutes.
+
+workflows:
+  ios-unsigned-ipa:
+    name: Dramix unsigned IPA
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.24.5
+    scripts:
+      - name: Resolve dependencies
+        script: flutter pub get
+
+      - name: Build for iOS (no code signing)
+        script: flutter build ios --release --no-codesign
+
+      - name: Package Payload into an IPA
+        script: |
+          set -e
+          cd build/ios/iphoneos
+          rm -rf Payload Dramix-unsigned.ipa
+          mkdir -p Payload
+          cp -R Runner.app Payload/
+          zip -qry Dramix-unsigned.ipa Payload
+          ls -l Dramix-unsigned.ipa
+
+    artifacts:
+      - build/ios/iphoneos/Dramix-unsigned.ipa
